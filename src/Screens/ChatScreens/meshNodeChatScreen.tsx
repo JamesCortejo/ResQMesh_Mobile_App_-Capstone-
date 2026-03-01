@@ -13,12 +13,11 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StackNavigationProp } from '@react-navigation/stack';
+import { RouteProp, useRoute } from '@react-navigation/native';
 import { RootStackParamList } from '../../navigations/appNavigations';
 
-type NavProp = StackNavigationProp<
-  RootStackParamList,
-  'MeshNodeChat'
->;
+type NavProp = StackNavigationProp<RootStackParamList, 'MeshNodeChat'>;
+type MeshNodeChatRouteProp = RouteProp<RootStackParamList, 'MeshNodeChat'>;
 
 interface Props {
   navigation: NavProp;
@@ -30,25 +29,23 @@ const messages = [
 ];
 
 const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
+  const route = useRoute<MeshNodeChatRouteProp>();
+  const { nodeName, users } = route.params;
+
   const renderMessage = ({ item }: any) => (
     <View
       style={[
         styles.messageWrapper,
-        item.sender === 'me'
-          ? styles.alignRight
-          : styles.alignLeft,
+        item.sender === 'me' ? styles.alignRight : styles.alignLeft,
       ]}
     >
       {item.sender !== 'me' && (
         <Text style={styles.senderName}>{item.name}</Text>
       )}
-
       <View
         style={[
           styles.messageBubble,
-          item.sender === 'me'
-            ? styles.myMessage
-            : styles.otherMessage,
+          item.sender === 'me' ? styles.myMessage : styles.otherMessage,
         ]}
       >
         <Text
@@ -72,8 +69,8 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
         </TouchableOpacity>
 
         <View style={styles.headerText}>
-          <Text style={styles.nodeTitle}>Downtown Hub</Text>
-          <Text style={styles.nodeSubtitle}>23 users connected</Text>
+          <Text style={styles.nodeTitle}>{nodeName}</Text>
+          <Text style={styles.nodeSubtitle}>{users} users connected</Text>
         </View>
 
         <Ionicons name="ellipsis-vertical" size={20} color="#777" />
@@ -95,24 +92,17 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
 
         {/* INPUT BAR */}
         <View style={styles.inputBar}>
-          {/* Voice Record */}
           <TouchableOpacity style={styles.iconButton}>
             <Ionicons name="mic-outline" size={22} color="#777" />
           </TouchableOpacity>
-
-          {/* Broadcast */}
           <TouchableOpacity style={styles.iconButton}>
             <Ionicons name="megaphone-outline" size={22} color="#777" />
           </TouchableOpacity>
-
-          {/* Text Input */}
           <TextInput
             placeholder="Message..."
             style={styles.input}
             placeholderTextColor="#999"
           />
-
-          {/* Send */}
           <TouchableOpacity style={styles.sendButton}>
             <Ionicons name="send" size={20} color="#fff" />
           </TouchableOpacity>
@@ -130,8 +120,6 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f4f6f8',
   },
-
-  /* HEADER */
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -158,8 +146,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#777',
   },
-
-  /* CHAT */
   chatArea: {
     padding: 16,
     paddingBottom: 8,
@@ -198,8 +184,6 @@ const styles = StyleSheet.create({
   myMessageText: {
     color: '#fff',
   },
-
-  /* INPUT */
   inputBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -229,7 +213,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-  },
+  }
 });
 
 export default MeshNodeChatScreen;

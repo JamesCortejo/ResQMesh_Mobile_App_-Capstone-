@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo, memo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,68 +6,130 @@ import {
   Dimensions,
   TouchableOpacity,
   Animated,
+  Alert,
+  ActivityIndicator,
 } from 'react-native';
-import MapView, {
-  Marker,
-  PROVIDER_GOOGLE,
-  Polyline,
-} from 'react-native-maps';
+import MapView, { Marker, Polyline, LocalTile } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import MainLayout from '../../layouts/MainLayout';
 import WelcomeCard from '../../components/WelcomeCard';
-import { meshNodes } from '../../data/meshNodes';
-import { MeshNode } from '../../types/MeshNode';
+import api from '../../services/api';
 
 const { width, height } = Dimensions.get('window');
 
-const MapScreen = memo(() => {
-  const [region, setRegion] = useState({
+interface MeshNode {
+  id: string;
+  nodeNumber: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  status: string;
+  users: number;
+  signal: string;
+  distress: boolean;
+}
+
+const MapScreen = () => {
+  const [selectedNode, setSelectedNode] = useState<MeshNode | null>(null);
+  const [nodes, setNodes] = useState<MeshNode[]>([]);
+  const [meshConnected, setMeshConnected] = useState(false);
+  const [internetOnNode, setInternetOnNode] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const mapRef = useRef<MapView | null>(null);
+
+  const initialRegion = {
     latitude: 7.9203,
     longitude: 125.0911,
     latitudeDelta: 0.03,
     longitudeDelta: 0.03,
-  });
-
-  const [selectedNode, setSelectedNode] = useState<MeshNode | null>(null);
-
-  const slideAnim = useRef(new Animated.Value(0)).current;
+  };
 
   useEffect(() => {
-    if (selectedNode) {
-      Animated.spring(slideAnim, {
-        toValue: 1,
-        useNativeDriver: true,
-        tension: 50,
-        friction: 7,
-      }).start();
-    } else {
-      Animated.spring(slideAnim, {
-        toValue: 0,
-        useNativeDriver: true,
-        tension: 50,
-        friction: 7,
-      }).start();
+    let isMounted = true;
+
+    const checkConnection = async () => {
+      try {
+        const statusRes = await api.get('/api/status', { timeout: 3000 });
+        if (isMounted) {
+          setMeshConnected(true);
+          setInternetOnNode(Boolean(statusRes.data.internet));
+          fetchNodes();
+        }
+      } catch {
+        if (isMounted) {
+          setMeshConnected(false);
+          setNodes([]);
+        }
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+
+    checkConnection();
+
+    const interval = setInterval(() => {
+      if (meshConnected) fetchNodes();
+    }, 10000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [meshConnected]);
+
+  const fetchNodes = async () => {
+    try {
+      const res = await api.get('/api/nodes');
+      setNodes(res.data);
+    } catch (error) {
+      console.error(error);
     }
-  }, [selectedNode, slideAnim]);
+  };
 
-  // Memoise mesh lines
+  useEffect(() => {
+    Animated.spring(slideAnim, {
+      toValue: selectedNode ? 1 : 0,
+      useNativeDriver: true,
+      tension: 50,
+      friction: 7,
+    }).start();
+  }, [selectedNode]);
+
   const meshLines = useMemo(
-    () => meshNodes.map((node) => ({
-      latitude: node.latitude,
-      longitude: node.longitude,
-    })),
-    []
+    () =>
+      nodes.map((node) => ({
+        latitude: node.latitude,
+        longitude: node.longitude,
+      })),
+    [nodes]
   );
 
-  // Memoise map style
-  const mapStyle = useMemo(
-    () => [
-      { featureType: 'poi', elementType: 'all', stylers: [{ visibility: 'off' }] },
-      { featureType: 'transit', elementType: 'all', stylers: [{ visibility: 'off' }] },
-      { featureType: 'road', elementType: 'labels', stylers: [{ visibility: 'off' }] },
-    ],
-    []
-  );
+  const handleGetDirections = async (node: MeshNode) => {
+    if (!meshConnected) {
+      Alert.alert('Not Connected', 'You are not connected to any mesh node.');
+      return;
+    }
+
+    if (!internetOnNode) {
+      Alert.alert('No Internet', 'Mesh node has no internet.');
+      return;
+    }
+
+    try {
+      const userLocation = { lat: 7.9203, lng: 125.0911 };
+
+      const routeRes = await api.post('/api/route', {
+        origin: userLocation,
+        destination: { lat: node.latitude, lng: node.longitude },
+      });
+
+      const duration = routeRes.data.routes?.[0]?.duration;
+      Alert.alert('Route Fetched', `ETA: ${duration ?? 'unknown'}`);
+    } catch {
+      Alert.alert('Error', 'Failed to get route.');
+    }
+  };
 
   const bottomSheetStyle = {
     transform: [
@@ -78,11 +140,18 @@ const MapScreen = memo(() => {
         }),
       },
     ],
-    opacity: slideAnim.interpolate({
-      inputRange: [0, 0.5, 1],
-      outputRange: [0, 0.8, 1],
-    }),
   };
+
+  if (loading) {
+    return (
+      <MainLayout activeTab="map">
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#1e88e5" />
+          <Text style={styles.loadingText}>Connecting to mesh...</Text>
+        </View>
+      </MainLayout>
+    );
+  }
 
   return (
     <MainLayout activeTab="map">
@@ -90,147 +159,132 @@ const MapScreen = memo(() => {
         <WelcomeCard />
 
         <View style={styles.mapWrapper}>
-          <MapView
-            provider={PROVIDER_GOOGLE}
-            style={styles.map}
-            region={region}
-            onRegionChangeComplete={setRegion}
-            showsUserLocation
-            showsPointsOfInterest={false}
-            customMapStyle={mapStyle}
-            showsMyLocationButton={false}
-            showsCompass={false}
-            showsScale={false}
-            showsIndoors={false}
-            toolbarEnabled={false}
-          >
-            <Polyline
-              coordinates={meshLines}
-              strokeColor="#1e88e5"
-              strokeWidth={3}
-              lineDashPattern={[6, 4]}
-            />
+          {meshConnected ? (
+            <MapView
+              ref={mapRef}
+              style={styles.map}
+              initialRegion={initialRegion}
+              showsUserLocation
+              showsCompass={false}
+              toolbarEnabled={false}
+            >
+              <LocalTile
+                pathTemplate="http://192.168.4.1:5000/api/map/tiles/{z}/{x}/{y}.png"
+                tileSize={256}
+                zIndex={0}
+              />
 
-            {meshNodes.map((node) => (
-              <Marker
-                key={node.id}
-                coordinate={{
-                  latitude: node.latitude,
-                  longitude: node.longitude,
-                }}
-                anchor={{ x: 0.5, y: 1 }}
-                onPress={() => setSelectedNode(node)}
-              >
-                <View style={styles.markerContainer}>
-                  <Ionicons
-                    name="location"
-                    size={34}
-                    color={node.distress ? '#d32f2f' : '#1e88e5'}
-                  />
-                  <View style={styles.nodeNumberContainer}>
-                    <Text style={styles.nodeNumberText}>
-                      {node.nodeNumber}
-                    </Text>
-                  </View>
-                </View>
-              </Marker>
-            ))}
-          </MapView>
+              <Polyline
+                coordinates={meshLines}
+                strokeColor="#1e88e5"
+                strokeWidth={3}
+                lineDashPattern={[6, 4]}
+              />
 
-          <View style={styles.infoCard}>
-            <Ionicons name="git-network-outline" size={18} color="#1e88e5" />
-            <Text style={styles.infoText}>
-              Mesh network nodes & live connections
-            </Text>
-          </View>
+              {nodes.map((node) => {
+                const extractedNumber = parseInt(
+                  node.nodeNumber.replace(/\D/g, ''),
+                  10
+                );
 
-          {selectedNode && (
-            <Animated.View style={[styles.bottomSheet, bottomSheetStyle]}>
-              <View style={styles.sheetHandle} />
-              <Text style={styles.sheetTitle}>
-                Node {selectedNode.nodeNumber} – {selectedNode.name}
+                return (
+                  <Marker
+                    key={node.id}
+                    coordinate={{
+                      latitude: node.latitude,
+                      longitude: node.longitude,
+                    }}
+                    anchor={{ x: 0.5, y: 0.5 }}
+                    onPress={() => setSelectedNode(node)}
+                  >
+                    <View
+                      style={[
+                        styles.markerCircle,
+                        {
+                          backgroundColor: node.distress
+                            ? '#b71c1c'
+                            : '#1e88e5',
+                        },
+                      ]}
+                    >
+                      <Text style={styles.markerText}>
+                        {extractedNumber}
+                      </Text>
+                    </View>
+                  </Marker>
+                );
+              })}
+            </MapView>
+          ) : (
+            <View style={styles.noConnection}>
+              <Ionicons name="wifi-outline" size={48} color="#aaa" />
+              <Text style={styles.noConnectionText}>
+                Not connected to mesh.
               </Text>
-              <Text style={styles.sheetText}>
-                Status:{' '}
-                <Text
-                  style={{
-                    fontWeight: '600',
-                    color: selectedNode.distress ? '#d32f2f' : '#2e7d32',
-                  }}
-                >
-                  {selectedNode.distress ? 'Distress Signal' : 'Active'}
-                </Text>
-              </Text>
-              <Text style={styles.sheetText}>Users: {selectedNode.users}</Text>
-              <Text style={styles.sheetText}>Signal: {selectedNode.signal}</Text>
-              <TouchableOpacity
-                style={styles.closeBtn}
-                onPress={() => setSelectedNode(null)}
-              >
-                <Text style={styles.closeText}>Close</Text>
-              </TouchableOpacity>
-            </Animated.View>
+            </View>
           )}
         </View>
+
+        {selectedNode && (
+          <Animated.View style={[styles.bottomSheet, bottomSheetStyle]}>
+            <Text style={styles.sheetTitle}>
+              Node {selectedNode.nodeNumber}
+            </Text>
+            <Text>{selectedNode.name}</Text>
+            <Text>Users: {selectedNode.users}</Text>
+            <Text>Signal: {selectedNode.signal}</Text>
+
+            <TouchableOpacity
+              style={styles.directionBtn}
+              onPress={() => handleGetDirections(selectedNode)}
+            >
+              <Text style={{ color: '#fff' }}>Get Directions</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity onPress={() => setSelectedNode(null)}>
+              <Text style={{ marginTop: 10, color: '#1e88e5' }}>
+                Close
+              </Text>
+            </TouchableOpacity>
+          </Animated.View>
+        )}
       </View>
     </MainLayout>
   );
-});
+};
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
+
   mapWrapper: {
     width: width - 32,
     height: height * 0.69,
-    borderRadius: 14,
-    overflow: 'hidden',
     marginTop: 8,
     alignSelf: 'center',
+    backgroundColor: '#f0f0f0',
   },
+
   map: {
     ...StyleSheet.absoluteFillObject,
   },
-  markerContainer: {
-    width: 42,
-    height: 42,
+
+  markerCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    elevation: 5,
   },
-  nodeNumberContainer: {
-    position: 'absolute',
-    top: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nodeNumberText: {
+
+  markerText: {
     color: '#fff',
-    fontSize: 13,
-    fontWeight: '700',
+    fontWeight: 'bold',
+    fontSize: 14,
   },
-  infoCard: {
-    position: 'absolute',
-    top: 16,
-    left: 16,
-    right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#fff',
-    padding: 12,
-    borderRadius: 12,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  infoText: {
-    fontSize: 13,
-    color: '#444',
-    fontWeight: '500',
-  },
+
   bottomSheet: {
     position: 'absolute',
     bottom: 10,
@@ -238,39 +292,42 @@ const styles = StyleSheet.create({
     right: 16,
     backgroundColor: '#fff',
     padding: 16,
-    borderRadius: 18,
+    borderRadius: 16,
     elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
   },
-  sheetHandle: {
-    width: 40,
-    height: 4,
-    backgroundColor: '#ccc',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 12,
-  },
+
   sheetTitle: {
+    fontWeight: 'bold',
     fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 6,
-    color: '#111',
-  },
-  sheetText: {
-    fontSize: 13,
-    color: '#555',
     marginBottom: 6,
   },
-  closeBtn: {
+
+  directionBtn: {
     marginTop: 12,
-    alignSelf: 'flex-end',
+    backgroundColor: '#1e88e5',
+    padding: 10,
+    borderRadius: 12,
+    alignItems: 'center',
   },
-  closeText: {
-    color: '#1e88e5',
-    fontWeight: '600',
+
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  loadingText: {
+    marginTop: 10,
+  },
+
+  noConnection: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  noConnectionText: {
+    marginTop: 10,
   },
 });
 

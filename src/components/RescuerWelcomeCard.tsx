@@ -1,19 +1,22 @@
 import React, { memo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../context/AuthContext';
 
 const RescuerWelcomeCard = memo(() => {
+  const { user } = useAuth();
+
+  if (!user) return null;
+
+  const fullName = `${user.firstName} ${user.lastName}`;
+
   return (
     <View style={styles.card}>
-      <Text style={styles.welcome}>Welcome, Rescuer Smith</Text>
+      <Text style={styles.welcome}>Welcome, {fullName}</Text>
 
       <View style={styles.userRow}>
-        <Ionicons
-          name="shield-checkmark-outline"
-          size={18}
-          color="#fb4f00"
-        />
-        <Text style={styles.userId}>RSQ-7F2B3A</Text>
+        <Ionicons name="shield-checkmark-outline" size={18} color="#fb4f00" />
+        <Text style={styles.userId}>{user.code}</Text>
       </View>
     </View>
   );

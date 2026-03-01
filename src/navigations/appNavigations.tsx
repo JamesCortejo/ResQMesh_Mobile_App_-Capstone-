@@ -1,6 +1,7 @@
 import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 
+import SplashScreen from '../Screens/SplashScreen'; // 👈 new
 import WelcomeScreen from '../index';
 
 // Civilian
@@ -9,8 +10,8 @@ import CivilianRegisterScreen from '../Screens/CivilianScreens/civilianRegisterS
 
 // Rescuer
 import RescuerLoginScreen from '../Screens/RescuerScreens/rescuerLoginScreen';
-import RescuerMainTabs from './RescuerMainTabs';          // ← new
-import RescuerSettingsScreen from '../Screens/RescuerScreens/settingsScreen'; // ← new
+import RescuerMainTabs from './RescuerMainTabs';
+import RescuerSettingsScreen from '../Screens/RescuerScreens/settingsScreen';
 
 // Main tabs (civilian)
 import MainTabs from './MainTabs';
@@ -19,13 +20,14 @@ import MainTabs from './MainTabs';
 import MeshNodeChatScreen from '../Screens/ChatScreens/meshNodeChatScreen';
 
 export type RootStackParamList = {
+  Splash: undefined; // 👈 new
   Welcome: undefined;
   CivilianLogin: undefined;
   CivilianRegister: undefined;
   RescuerLogin: undefined;
-  MainTabs: undefined;                // civilian main
-  RescuerMainTabs: undefined;        // rescuer main (new)
-  RescuerSettings: undefined;        // rescuer settings (new)
+  MainTabs: undefined;
+  RescuerMainTabs: undefined;
+  RescuerSettings: undefined;
   MeshNodeChat: { nodeName: string; users: number };
 };
 
@@ -33,7 +35,12 @@ const Stack = createStackNavigator<RootStackParamList>();
 
 const AppNavigations = () => {
   return (
-    <Stack.Navigator initialRouteName="Welcome">
+    <Stack.Navigator initialRouteName="Splash">
+      <Stack.Screen
+        name="Splash"
+        component={SplashScreen}
+        options={{ headerShown: false }}
+      />
       <Stack.Screen
         name="Welcome"
         component={WelcomeScreen}
@@ -66,25 +73,21 @@ const AppNavigations = () => {
           headerTintColor: '#fff',
         }}
       />
-      {/* Civilian main */}
       <Stack.Screen
         name="MainTabs"
         component={MainTabs}
         options={{ headerShown: false }}
       />
-      {/* Rescuer main */}
       <Stack.Screen
         name="RescuerMainTabs"
         component={RescuerMainTabs}
         options={{ headerShown: false }}
       />
-      {/* Rescuer settings (stack screen) */}
       <Stack.Screen
         name="RescuerSettings"
         component={RescuerSettingsScreen}
         options={{ headerShown: false }}
       />
-      {/* Shared chat screen */}
       <Stack.Screen
         name="MeshNodeChat"
         component={MeshNodeChatScreen}

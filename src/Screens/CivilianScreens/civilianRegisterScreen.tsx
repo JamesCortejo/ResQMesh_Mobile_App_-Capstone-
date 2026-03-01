@@ -7,11 +7,15 @@ import {
   TouchableOpacity,
   SafeAreaView,
   ScrollView,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../../navigations/appNavigations';
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
+import api from '../../services/api';
+import LoadingOverlay from '../../components/LoadingOverlay';
 
 type CivilianRegisterNavigationProp = StackNavigationProp<
   RootStackParamList,
@@ -26,29 +30,105 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
   const [firstName, setFirstName] = useState('');
   const [middleName, setMiddleName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [age, setAge] = useState('');
+  const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [occupation, setOccupation] = useState('');
   const [bloodType, setBloodType] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [errors, setErrors] = useState<{ [key: string]: string }>({});
+  const [generalError, setGeneralError] = useState('');
+
+  const validateForm = () => {
+    const newErrors: { [key: string]: string } = {};
+
+    if (!firstName.trim()) newErrors.firstName = 'First name is required';
+    if (!lastName.trim()) newErrors.lastName = 'Last name is required';
+    if (!age.trim()) newErrors.age = 'Age is required';
+    else if (isNaN(Number(age)) || Number(age) < 1 || Number(age) > 120)
+      newErrors.age = 'Please enter a valid age (1-120)';
+    if (!address.trim()) newErrors.address = 'Address is required';
+    if (!phone.trim()) newErrors.phone = 'Phone number is required';
+    else if (!/^[0-9]{10,12}$/.test(phone.replace(/\D/g, '')))
+      newErrors.phone = 'Enter a valid phone number (10-12 digits)';
+    if (!password) newErrors.password = 'Password is required';
+    else if (password.length < 6) newErrors.password = 'Password must be at least 6 characters';
+    if (password !== confirmPassword) newErrors.confirmPassword = 'Passwords do not match';
+
+    return newErrors;
+  };
+
+  const handleRegister = async () => {
+    setErrors({});
+    setGeneralError('');
+
+    const validationErrors = validateForm();
+    if (Object.keys(validationErrors).length > 0) {
+      setErrors(validationErrors);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await api.post('/auth/civilian/register', {
+        firstName,
+        middleName,
+        lastName,
+        age: parseInt(age, 10),
+        address,
+        phone,
+        occupation,
+        bloodType,
+        password,
+      });
+      
+      Alert.alert(
+        'Registration Successful',
+        'Your account has been created. Please log in.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
+    } catch (error: any) {
+      if (error.response?.data?.error) {
+        setGeneralError(error.response.data.error);
+      } else {
+        setGeneralError('Registration failed. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.container}>
-
+      <LoadingOverlay visible={loading} />
+      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
         <Text style={styles.title}>Create Account</Text>
         <Text style={styles.subtitle}>Civilian Registration</Text>
 
+        {generalError !== '' && (
+          <View style={styles.errorBanner}>
+            <Ionicons name="alert-circle-outline" size={18} color="#d32f2f" />
+            <Text style={styles.errorText}>{generalError}</Text>
+          </View>
+        )}
+
         {/* First Name */}
-        <View style={styles.inputContainer}>
+        <View style={[styles.inputContainer, errors.firstName && styles.inputError]}>
           <Ionicons name="person-outline" size={20} color="#777" />
           <TextInput
             style={styles.input}
-            placeholder="First Name"
+            placeholder="First Name *"
             value={firstName}
-            onChangeText={setFirstName}
+            onChangeText={(text) => {
+              setFirstName(text);
+              setErrors((prev) => ({ ...prev, firstName: '' }));
+            }}
+            editable={!loading}
           />
         </View>
+        {errors.firstName && <Text style={styles.fieldError}>{errors.firstName}</Text>}
 
         {/* Middle Name */}
         <View style={styles.inputContainer}>
@@ -58,31 +138,76 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
             placeholder="Middle Name"
             value={middleName}
             onChangeText={setMiddleName}
+            editable={!loading}
           />
         </View>
 
         {/* Last Name */}
-        <View style={styles.inputContainer}>
+        <View style={[styles.inputContainer, errors.lastName && styles.inputError]}>
           <Ionicons name="person-outline" size={20} color="#777" />
           <TextInput
             style={styles.input}
-            placeholder="Last Name"
+            placeholder="Last Name *"
             value={lastName}
-            onChangeText={setLastName}
+            onChangeText={(text) => {
+              setLastName(text);
+              setErrors((prev) => ({ ...prev, lastName: '' }));
+            }}
+            editable={!loading}
           />
         </View>
+        {errors.lastName && <Text style={styles.fieldError}>{errors.lastName}</Text>}
+
+        {/* Age */}
+        <View style={[styles.inputContainer, errors.age && styles.inputError]}>
+          <Ionicons name="calendar-outline" size={20} color="#777" />
+          <TextInput
+            style={styles.input}
+            placeholder="Age *"
+            keyboardType="numeric"
+            value={age}
+            onChangeText={(text) => {
+              setAge(text);
+              setErrors((prev) => ({ ...prev, age: '' }));
+            }}
+            editable={!loading}
+          />
+        </View>
+        {errors.age && <Text style={styles.fieldError}>{errors.age}</Text>}
+
+        {/* Address */}
+        <View style={[styles.inputContainer, errors.address && styles.inputError]}>
+          <Ionicons name="location-outline" size={20} color="#777" />
+          <TextInput
+            style={styles.input}
+            placeholder="Address *"
+            value={address}
+            onChangeText={(text) => {
+              setAddress(text);
+              setErrors((prev) => ({ ...prev, address: '' }));
+            }}
+            editable={!loading}
+            multiline
+          />
+        </View>
+        {errors.address && <Text style={styles.fieldError}>{errors.address}</Text>}
 
         {/* Phone Number */}
-        <View style={styles.inputContainer}>
+        <View style={[styles.inputContainer, errors.phone && styles.inputError]}>
           <Ionicons name="call-outline" size={20} color="#777" />
           <TextInput
             style={styles.input}
-            placeholder="Phone Number"
+            placeholder="Phone Number *"
             keyboardType="phone-pad"
             value={phone}
-            onChangeText={setPhone}
+            onChangeText={(text) => {
+              setPhone(text);
+              setErrors((prev) => ({ ...prev, phone: '' }));
+            }}
+            editable={!loading}
           />
         </View>
+        {errors.phone && <Text style={styles.fieldError}>{errors.phone}</Text>}
 
         {/* Occupation */}
         <View style={styles.inputContainer}>
@@ -92,6 +217,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
             placeholder="Occupation"
             value={occupation}
             onChangeText={setOccupation}
+            editable={!loading}
           />
         </View>
 
@@ -102,6 +228,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
             selectedValue={bloodType}
             onValueChange={(itemValue) => setBloodType(itemValue)}
             style={styles.picker}
+            enabled={!loading}
           >
             <Picker.Item label="Select Blood Type" value="" />
             <Picker.Item label="A+" value="A+" />
@@ -116,64 +243,83 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
         </View>
 
         {/* Password */}
-        <View style={styles.inputContainer}>
+        <View style={[styles.inputContainer, errors.password && styles.inputError]}>
           <Ionicons name="lock-closed-outline" size={20} color="#777" />
           <TextInput
             style={styles.input}
-            placeholder="Password"
+            placeholder="Password *"
             secureTextEntry
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(text) => {
+              setPassword(text);
+              setErrors((prev) => ({ ...prev, password: '' }));
+            }}
+            editable={!loading}
           />
         </View>
+        {errors.password && <Text style={styles.fieldError}>{errors.password}</Text>}
 
         {/* Confirm Password */}
-        <View style={styles.inputContainer}>
+        <View style={[styles.inputContainer, errors.confirmPassword && styles.inputError]}>
           <Ionicons name="lock-closed-outline" size={20} color="#777" />
           <TextInput
             style={styles.input}
-            placeholder="Confirm Password"
+            placeholder="Confirm Password *"
             secureTextEntry
             value={confirmPassword}
-            onChangeText={setConfirmPassword}
+            onChangeText={(text) => {
+              setConfirmPassword(text);
+              setErrors((prev) => ({ ...prev, confirmPassword: '' }));
+            }}
+            editable={!loading}
           />
         </View>
+        {errors.confirmPassword && <Text style={styles.fieldError}>{errors.confirmPassword}</Text>}
 
         {/* Register Button */}
-        <TouchableOpacity style={styles.registerButton}>
-          <Text style={styles.registerText}>Register</Text>
+        <TouchableOpacity
+          style={[styles.registerButton, loading && styles.disabledButton]}
+          onPress={handleRegister}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.registerText}>Register</Text>
+          )}
         </TouchableOpacity>
 
         {/* Back to Login */}
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={() => navigation.goBack()} disabled={loading}>
           <Text style={styles.loginLink}>
             Already have an account? <Text style={styles.loginText}>Login</Text>
           </Text>
         </TouchableOpacity>
-
       </ScrollView>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: '#fff',
+  safeArea: { flex: 1, backgroundColor: '#fff' },
+  container: { padding: 24 },
+  title: { fontSize: 24, fontWeight: '600', color: '#111', marginBottom: 4 },
+  subtitle: { fontSize: 14, color: '#777', marginBottom: 24 },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffebee',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#ffcdd2',
   },
-  container: {
-    padding: 24,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: '600',
-    color: '#111',
-    marginBottom: 4,
-  },
-  subtitle: {
+  errorText: {
+    color: '#d32f2f',
     fontSize: 14,
-    color: '#777',
-    marginBottom: 24,
+    marginLeft: 8,
+    flex: 1,
   },
   inputContainer: {
     flexDirection: 'row',
@@ -183,7 +329,18 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 12,
     height: 52,
-    marginBottom: 14,
+    marginBottom: 4,
+  },
+  inputError: {
+    borderColor: '#d32f2f',
+    borderWidth: 2,
+  },
+  input: { flex: 1, marginLeft: 10, fontSize: 15, color: '#111' },
+  fieldError: {
+    color: '#d32f2f',
+    fontSize: 12,
+    marginBottom: 8,
+    marginLeft: 4,
   },
   pickerContainer: {
     flexDirection: 'row',
@@ -195,16 +352,7 @@ const styles = StyleSheet.create({
     height: 52,
     marginBottom: 14,
   },
-  picker: {
-    flex: 1,
-    marginLeft: 6,
-  },
-  input: {
-    flex: 1,
-    marginLeft: 10,
-    fontSize: 15,
-    color: '#111',
-  },
+  picker: { flex: 1, marginLeft: 6 },
   registerButton: {
     backgroundColor: '#1e88e5',
     height: 52,
@@ -214,20 +362,12 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 20,
   },
-  registerText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '500',
+  disabledButton: {
+    backgroundColor: '#a0c6e9',
   },
-  loginLink: {
-    textAlign: 'center',
-    fontSize: 14,
-    color: '#777',
-  },
-  loginText: {
-    color: '#1e88e5',
-    fontWeight: '500',
-  },
+  registerText: { color: '#fff', fontSize: 16, fontWeight: '500' },
+  loginLink: { textAlign: 'center', fontSize: 14, color: '#777' },
+  loginText: { color: '#1e88e5', fontWeight: '500' },
 });
 
 export default CivilianRegisterScreen;
