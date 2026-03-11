@@ -1,7 +1,7 @@
 import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 
-import SplashScreen from '../Screens/SplashScreen'; // 👈 new
+import SplashScreen from '../Screens/SplashScreen';
 import WelcomeScreen from '../index';
 
 // Civilian
@@ -20,7 +20,7 @@ import MainTabs from './MainTabs';
 import MeshNodeChatScreen from '../Screens/ChatScreens/meshNodeChatScreen';
 
 export type RootStackParamList = {
-  Splash: undefined; // 👈 new
+  Splash: undefined;
   Welcome: undefined;
   CivilianLogin: undefined;
   CivilianRegister: undefined;
@@ -28,7 +28,7 @@ export type RootStackParamList = {
   MainTabs: undefined;
   RescuerMainTabs: undefined;
   RescuerSettings: undefined;
-  MeshNodeChat: { nodeName: string; users: number };
+  MeshNodeChat: { nodeId: string; nodeName: string; users: number }; // ✅ added nodeId
 };
 
 const Stack = createStackNavigator<RootStackParamList>();

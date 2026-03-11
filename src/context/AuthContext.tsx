@@ -5,6 +5,7 @@ import api from '../services/api';
 interface AuthContextData {
   user: any | null;
   loading: boolean;
+  nodeId: string | null;
   signIn(
     credentials: { phone: string; password: string; nodeId?: string },
     role: 'civilian' | 'rescuer',
@@ -18,6 +19,7 @@ const AuthContext = createContext<AuthContextData>({} as AuthContextData);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
+  const [nodeId, setNodeId] = useState<string | null>(null);
 
   useEffect(() => {
     const loadStorageData = async () => {
@@ -25,12 +27,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const storedUser = await AsyncStorage.getItem('user');
         const storedToken = await AsyncStorage.getItem('accessToken');
+        const storedNodeId = await AsyncStorage.getItem('nodeId');
         console.log('🔍 storedUser:', storedUser);
         console.log('🔍 storedToken:', storedToken ? '***present***' : 'null');
-        
+        console.log('🔍 storedNodeId:', storedNodeId);
+
         if (storedUser && storedToken) {
           const parsedUser = JSON.parse(storedUser);
           setUser(parsedUser);
+          setNodeId(storedNodeId);
           api.defaults.headers.Authorization = `Bearer ${storedToken}`;
           console.log('✅ AuthContext: user restored from storage', parsedUser);
         } else {
@@ -57,21 +62,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const response = await api.post(endpoint, {
         phone: credentials.phone,
         password: credentials.password,
-        nodeId: credentials.nodeId, // Include nodeId in request
+        nodeId: credentials.nodeId,
       });
       const { access_token, user: userData } = response.data;
       console.log('✅ Login successful, token:', access_token);
 
       setUser(userData);
+      if (credentials.nodeId) {
+        setNodeId(credentials.nodeId);
+      }
       api.defaults.headers.Authorization = `Bearer ${access_token}`;
 
       if (remember) {
         await AsyncStorage.setItem('accessToken', access_token);
         await AsyncStorage.setItem('user', JSON.stringify(userData));
-        console.log('💾 AuthContext: token and user saved to AsyncStorage');
+        if (credentials.nodeId) {
+          await AsyncStorage.setItem('nodeId', credentials.nodeId);
+        }
+        console.log('💾 AuthContext: token, user, and nodeId saved to AsyncStorage');
       } else {
         await AsyncStorage.removeItem('accessToken');
         await AsyncStorage.removeItem('user');
+        await AsyncStorage.removeItem('nodeId');
         console.log('🧹 AuthContext: cleared any existing stored credentials');
       }
     } catch (error: any) {
@@ -84,13 +96,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     console.log('🚪 signOut called');
     await AsyncStorage.removeItem('accessToken');
     await AsyncStorage.removeItem('user');
+    await AsyncStorage.removeItem('nodeId');
     setUser(null);
+    setNodeId(null);
     delete api.defaults.headers.Authorization;
     console.log('✅ AuthContext: user signed out, storage cleared');
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signIn, signOut }}>
+    <AuthContext.Provider value={{ user, loading, nodeId, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );

@@ -4,16 +4,17 @@ import {
   Text,
   StyleSheet,
   Dimensions,
-  TouchableOpacity,
   Animated,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
-import MapView, { Marker, Polyline, LocalTile } from 'react-native-maps';
+import MapView, { Marker, Polyline, UrlTile } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import MainLayout from '../../layouts/MainLayout';
 import WelcomeCard from '../../components/WelcomeCard';
+import NodeInfoCard from '../../components/NodeInfoCard';
 import api from '../../services/api';
+import { NODE_INACTIVE_TIMEOUT_MS } from '../../constants/timeouts';
+
 
 const { width, height } = Dimensions.get('window');
 
@@ -27,16 +28,42 @@ interface MeshNode {
   users: number;
   signal: string;
   distress: boolean;
+  lastSeen?: string;
+}
+
+interface DistressDetail {
+  id: number;
+  code: string;
+  reason: string;
+  lat: number;
+  lng: number;
+  timestamp: string;
+  status: string;
+  priority: string;
+  user: {
+    firstName: string;
+    lastName: string;
+    phone: string;
+    bloodType: string;
+    occupation: string;
+    age: number;
+    address: string;
+  };
 }
 
 const MapScreen = () => {
   const [selectedNode, setSelectedNode] = useState<MeshNode | null>(null);
+  const [selectedNodeDistress, setSelectedNodeDistress] =
+    useState<DistressDetail | null>(null);
   const [nodes, setNodes] = useState<MeshNode[]>([]);
   const [meshConnected, setMeshConnected] = useState(false);
-  const [internetOnNode, setInternetOnNode] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [connectedNodeId, setConnectedNodeId] = useState<string | null>(null);
+
   const slideAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView | null>(null);
+  const pulseAnims = useRef<{ [key: string]: Animated.Value }>({}).current;
+  
 
   const initialRegion = {
     latitude: 7.9203,
@@ -45,15 +72,24 @@ const MapScreen = () => {
     longitudeDelta: 0.03,
   };
 
-  useEffect(() => {
+   const isNodeActive = (node: MeshNode) => {
+    // If this is the node we are directly connected to, it's definitely active
+    if (node.id === connectedNodeId) return true;
+
+    if (!node.lastSeen) return false;
+    const lastSeenTime = new Date(node.lastSeen).getTime();
+    return Date.now() - lastSeenTime < NODE_INACTIVE_TIMEOUT_MS;
+  };
+
+    useEffect(() => {
     let isMounted = true;
 
     const checkConnection = async () => {
       try {
         const statusRes = await api.get('/api/status', { timeout: 3000 });
         if (isMounted) {
+          setConnectedNodeId(statusRes.data.node_id); // 👈 STORE THE NODE ID
           setMeshConnected(true);
-          setInternetOnNode(Boolean(statusRes.data.internet));
           fetchNodes();
         }
       } catch {
@@ -81,10 +117,39 @@ const MapScreen = () => {
   const fetchNodes = async () => {
     try {
       const res = await api.get('/api/nodes');
-      setNodes(res.data);
+      const nodeList: MeshNode[] = res.data;
+
+      setNodes(nodeList);
+
+      nodeList.forEach((node) => {
+        if (node.distress && !pulseAnims[node.id]) {
+          pulseAnims[node.id] = new Animated.Value(1);
+          startPulse(node.id);
+        }
+      });
     } catch (error) {
-      console.error(error);
+      console.error('Failed to fetch nodes', error);
     }
+  };
+
+  const startPulse = (nodeId: string) => {
+    const anim = pulseAnims[nodeId];
+    if (!anim) return;
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(anim, {
+          toValue: 1.3,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: 800,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
   };
 
   useEffect(() => {
@@ -94,7 +159,22 @@ const MapScreen = () => {
       tension: 50,
       friction: 7,
     }).start();
+
+    if (selectedNode?.distress) {
+      fetchDistressDetails(selectedNode.id);
+    } else {
+      setSelectedNodeDistress(null);
+    }
   }, [selectedNode]);
+
+  const fetchDistressDetails = async (nodeId: string) => {
+    try {
+      const res = await api.get(`/api/node/${nodeId}/distress`);
+      setSelectedNodeDistress(res.data);
+    } catch (error) {
+      console.error('Failed to fetch distress details', error);
+    }
+  };
 
   const meshLines = useMemo(
     () =>
@@ -104,43 +184,6 @@ const MapScreen = () => {
       })),
     [nodes]
   );
-
-  const handleGetDirections = async (node: MeshNode) => {
-    if (!meshConnected) {
-      Alert.alert('Not Connected', 'You are not connected to any mesh node.');
-      return;
-    }
-
-    if (!internetOnNode) {
-      Alert.alert('No Internet', 'Mesh node has no internet.');
-      return;
-    }
-
-    try {
-      const userLocation = { lat: 7.9203, lng: 125.0911 };
-
-      const routeRes = await api.post('/api/route', {
-        origin: userLocation,
-        destination: { lat: node.latitude, lng: node.longitude },
-      });
-
-      const duration = routeRes.data.routes?.[0]?.duration;
-      Alert.alert('Route Fetched', `ETA: ${duration ?? 'unknown'}`);
-    } catch {
-      Alert.alert('Error', 'Failed to get route.');
-    }
-  };
-
-  const bottomSheetStyle = {
-    transform: [
-      {
-        translateY: slideAnim.interpolate({
-          inputRange: [0, 1],
-          outputRange: [300, 0],
-        }),
-      },
-    ],
-  };
 
   if (loading) {
     return (
@@ -168,12 +211,14 @@ const MapScreen = () => {
               showsCompass={false}
               toolbarEnabled={false}
             >
-              <LocalTile
-                pathTemplate="http://192.168.4.1:5000/api/map/tiles/{z}/{x}/{y}.png"
-                tileSize={256}
-                zIndex={0}
+              {/* Tile Server */}
+              <UrlTile
+                urlTemplate="http://192.168.4.1:5000/api/map/tiles/{z}/{x}/{y}.png"
+                maximumZ={19}
+                flipY={false}
               />
 
+              {/* Mesh Network Lines */}
               <Polyline
                 coordinates={meshLines}
                 strokeColor="#1e88e5"
@@ -181,11 +226,21 @@ const MapScreen = () => {
                 lineDashPattern={[6, 4]}
               />
 
+              {/* Node Markers */}
               {nodes.map((node) => {
                 const extractedNumber = parseInt(
                   node.nodeNumber.replace(/\D/g, ''),
                   10
                 );
+
+                const isDistressed = node.distress;
+                const active = isNodeActive(node);
+                const pulseAnim = pulseAnims[node.id];
+
+                let markerColor = '#1e88e5';
+
+                if (!active) markerColor = '#9e9e9e';
+                if (isDistressed) markerColor = '#b71c1c';
 
                 return (
                   <Marker
@@ -197,19 +252,32 @@ const MapScreen = () => {
                     anchor={{ x: 0.5, y: 0.5 }}
                     onPress={() => setSelectedNode(node)}
                   >
-                    <View
-                      style={[
-                        styles.markerCircle,
-                        {
-                          backgroundColor: node.distress
-                            ? '#b71c1c'
-                            : '#1e88e5',
-                        },
-                      ]}
-                    >
-                      <Text style={styles.markerText}>
-                        {extractedNumber}
-                      </Text>
+                    <View>
+                      {isDistressed && pulseAnim && (
+                        <Animated.View
+                          style={[
+                            styles.glowBackground,
+                            {
+                              transform: [{ scale: pulseAnim }],
+                              opacity: pulseAnim.interpolate({
+                                inputRange: [1, 1.3],
+                                outputRange: [0.8, 0],
+                              }),
+                            },
+                          ]}
+                        />
+                      )}
+
+                      <View
+                        style={[
+                          styles.markerCircle,
+                          { backgroundColor: markerColor },
+                        ]}
+                      >
+                        <Text style={styles.markerText}>
+                          {extractedNumber}
+                        </Text>
+                      </View>
                     </View>
                   </Marker>
                 );
@@ -226,26 +294,27 @@ const MapScreen = () => {
         </View>
 
         {selectedNode && (
-          <Animated.View style={[styles.bottomSheet, bottomSheetStyle]}>
-            <Text style={styles.sheetTitle}>
-              Node {selectedNode.nodeNumber}
-            </Text>
-            <Text>{selectedNode.name}</Text>
-            <Text>Users: {selectedNode.users}</Text>
-            <Text>Signal: {selectedNode.signal}</Text>
-
-            <TouchableOpacity
-              style={styles.directionBtn}
-              onPress={() => handleGetDirections(selectedNode)}
-            >
-              <Text style={{ color: '#fff' }}>Get Directions</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity onPress={() => setSelectedNode(null)}>
-              <Text style={{ marginTop: 10, color: '#1e88e5' }}>
-                Close
-              </Text>
-            </TouchableOpacity>
+          <Animated.View
+            style={[
+              styles.cardContainer,
+              {
+                transform: [
+                  {
+                    translateY: slideAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [300, 0],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          >
+            <NodeInfoCard
+              node={selectedNode}
+              distressDetails={selectedNodeDistress}
+              active={isNodeActive(selectedNode)}
+              onClose={() => setSelectedNode(null)}
+            />
           </Animated.View>
         )}
       </View>
@@ -262,11 +331,11 @@ const styles = StyleSheet.create({
     marginTop: 8,
     alignSelf: 'center',
     backgroundColor: '#f0f0f0',
+    borderRadius: 14,
+    overflow: 'hidden',
   },
 
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
+  map: { ...StyleSheet.absoluteFillObject },
 
   markerCircle: {
     width: 34,
@@ -285,29 +354,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
 
-  bottomSheet: {
+  glowBackground: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#d32f2f',
+    top: -3,
+    left: -3,
+    zIndex: -1,
+  },
+
+  cardContainer: {
     position: 'absolute',
     bottom: 10,
     left: 16,
     right: 16,
-    backgroundColor: '#fff',
-    padding: 16,
-    borderRadius: 16,
-    elevation: 8,
-  },
-
-  sheetTitle: {
-    fontWeight: 'bold',
-    fontSize: 16,
-    marginBottom: 6,
-  },
-
-  directionBtn: {
-    marginTop: 12,
-    backgroundColor: '#1e88e5',
-    padding: 10,
-    borderRadius: 12,
-    alignItems: 'center',
   },
 
   loadingContainer: {

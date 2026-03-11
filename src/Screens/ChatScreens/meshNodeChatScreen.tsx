@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   StatusBar,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { RouteProp, useRoute } from '@react-navigation/native';
+import { RouteProp, useRoute, useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../../navigations/appNavigations';
+import { useAuth } from '../../context/AuthContext';
+import api from '../../services/api';
 
 type NavProp = StackNavigationProp<RootStackParamList, 'MeshNodeChat'>;
 type MeshNodeChatRouteProp = RouteProp<RootStackParamList, 'MeshNodeChat'>;
@@ -23,74 +27,175 @@ interface Props {
   navigation: NavProp;
 }
 
-const messages = [
-  { id: '1', text: 'Anyone here?', sender: 'other', name: 'Civilian 12' },
-  { id: '2', text: 'Yes, we are responding.', sender: 'me' },
-];
+interface Message {
+  id: number;
+  code: string;
+  senderId: number | null;
+  senderCode: string;
+  senderName: string;
+  content: string;
+  type: string;
+  timestamp: string;
+}
 
 const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
   const route = useRoute<MeshNodeChatRouteProp>();
-  const { nodeName, users } = route.params;
+  const { nodeId, nodeName, users } = route.params;
+  const { user } = useAuth();
 
-  const renderMessage = ({ item }: any) => (
-    <View
-      style={[
-        styles.messageWrapper,
-        item.sender === 'me' ? styles.alignRight : styles.alignLeft,
-      ]}
-    >
-      {item.sender !== 'me' && (
-        <Text style={styles.senderName}>{item.name}</Text>
-      )}
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchMessages = useCallback(async () => {
+    if (!nodeId) return;
+    try {
+      setError(null);
+      const response = await api.get(`/api/messages/${nodeId}`);
+      setMessages(response.data);
+    } catch (err: any) {
+      console.error('Failed to fetch messages', err);
+      setError('Could not load messages. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  }, [nodeId]);
+
+  useEffect(() => {
+    fetchMessages();
+  }, [fetchMessages]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchMessages();
+    }, [fetchMessages])
+  );
+
+  const handleSend = async () => {
+    if (!inputText.trim() || sending) return;
+
+    setSending(true);
+    try {
+      await api.post('/api/messages', {
+        nodeId,
+        content: inputText.trim(),
+        type: 'text',
+      });
+      setInputText('');
+      await fetchMessages();
+    } catch (err: any) {
+      console.error('Failed to send message', err);
+      // Extract error message from backend response
+      const errorMsg = err.response?.data?.error || 'Could not send message. Please try again.';
+      Alert.alert('Error', errorMsg);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const renderMessage = ({ item }: { item: Message }) => {
+    const isMe = item.senderCode === user?.code;
+    return (
       <View
         style={[
-          styles.messageBubble,
-          item.sender === 'me' ? styles.myMessage : styles.otherMessage,
+          styles.messageWrapper,
+          isMe ? styles.alignRight : styles.alignLeft,
         ]}
       >
-        <Text
+        {!isMe && <Text style={styles.senderName}>{item.senderName}</Text>}
+        <View
           style={[
-            styles.messageText,
-            item.sender === 'me' && styles.myMessageText,
+            styles.messageBubble,
+            isMe ? styles.myMessage : styles.otherMessage,
           ]}
         >
-          {item.text}
-        </Text>
+          <Text
+            style={[
+              styles.messageText,
+              isMe && styles.myMessageText,
+            ]}
+          >
+            {item.content}
+          </Text>
+        </View>
       </View>
-    </View>
-  );
+    );
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Ionicons name="arrow-back" size={24} color="#1e88e5" />
+          </TouchableOpacity>
+          <View style={styles.headerText}>
+            <Text style={styles.nodeTitle}>{nodeName}</Text>
+            <Text style={styles.nodeSubtitle}>{users} users connected</Text>
+          </View>
+          <Ionicons name="ellipsis-vertical" size={20} color="#777" />
+        </View>
+        <View style={styles.center}>
+          <ActivityIndicator size="large" color="#1e88e5" />
+          <Text style={styles.loadingText}>Loading messages...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (error) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Ionicons name="arrow-back" size={24} color="#1e88e5" />
+          </TouchableOpacity>
+          <View style={styles.headerText}>
+            <Text style={styles.nodeTitle}>{nodeName}</Text>
+            <Text style={styles.nodeSubtitle}>{users} users connected</Text>
+          </View>
+          <Ionicons name="ellipsis-vertical" size={20} color="#777" />
+        </View>
+        <View style={styles.center}>
+          <Ionicons name="alert-circle-outline" size={48} color="#d32f2f" />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={fetchMessages}>
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* HEADER */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={24} color="#1e88e5" />
         </TouchableOpacity>
-
         <View style={styles.headerText}>
           <Text style={styles.nodeTitle}>{nodeName}</Text>
           <Text style={styles.nodeSubtitle}>{users} users connected</Text>
         </View>
-
         <Ionicons name="ellipsis-vertical" size={20} color="#777" />
       </View>
 
-      {/* CHAT + INPUT */}
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
         <FlatList
           data={messages}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => item.id.toString()}
           renderItem={renderMessage}
           contentContainerStyle={styles.chatArea}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         />
 
-        {/* INPUT BAR */}
         <View style={styles.inputBar}>
           <TouchableOpacity style={styles.iconButton}>
             <Ionicons name="mic-outline" size={22} color="#777" />
@@ -102,9 +207,21 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
             placeholder="Message..."
             style={styles.input}
             placeholderTextColor="#999"
+            value={inputText}
+            onChangeText={setInputText}
+            onSubmitEditing={handleSend}
+            editable={!sending}
           />
-          <TouchableOpacity style={styles.sendButton}>
-            <Ionicons name="send" size={20} color="#fff" />
+          <TouchableOpacity
+            style={[styles.sendButton, sending && styles.sendButtonDisabled]}
+            onPress={handleSend}
+            disabled={sending || !inputText.trim()}
+          >
+            {sending ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="send" size={20} color="#fff" />
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -113,9 +230,7 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
 };
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
+  flex: { flex: 1 },
   safeArea: {
     flex: 1,
     backgroundColor: '#f4f6f8',
@@ -213,7 +328,39 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-  }
+  },
+  sendButtonDisabled: {
+    backgroundColor: '#a0c4f0',
+  },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#555',
+  },
+  errorText: {
+    fontSize: 16,
+    color: '#d32f2f',
+    textAlign: 'center',
+    marginTop: 12,
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 20,
+    backgroundColor: '#1e88e5',
+    borderRadius: 8,
+  },
+  retryText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
 });
 
 export default MeshNodeChatScreen;

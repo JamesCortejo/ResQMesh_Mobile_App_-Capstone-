@@ -8,81 +8,113 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import MainLayout from '../../layouts/MainLayout';
 import WelcomeCard from '../../components/WelcomeCard';
 import { MeshNode } from '../../types/MeshNode';
 import { useRootNavigation } from '../../hooks/useRootNavigation';
 import api from '../../services/api';
+import { NODE_INACTIVE_TIMEOUT_MS } from '../../constants/timeouts';
 
 const MainChatScreen = memo(() => {
   const rootNavigation = useRootNavigation();
-  const [connectedNode, setConnectedNode] = useState<MeshNode | null>(null);
+  const [nodes, setNodes] = useState<MeshNode[]>([]);
+  const [connectedNodeId, setConnectedNodeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let isMounted = true;
+  const isNodeActive = (node: MeshNode) => {
+  // If this is the node we are directly connected to, it's definitely active
+  if (node.id === connectedNodeId) return true;
 
-    const fetchConnectedNode = async () => {
-      try {
-        const statusRes = await api.get('/api/status', { timeout: 3000 });
-        if (statusRes.status !== 200) {
-          throw new Error('Unable to reach mesh node');
-        }
-        const nodeId = statusRes.data.node_id;
+  if (!node.lastSeen) return false;
+  const lastSeenTime = new Date(node.lastSeen).getTime();
+  return Date.now() - lastSeenTime < NODE_INACTIVE_TIMEOUT_MS;
+};
 
-        const nodesRes = await api.get('/api/nodes');
-        const nodes: MeshNode[] = nodesRes.data;
-        const thisNode = nodes.find(n => n.id === nodeId);
-
-        if (!thisNode) {
-          throw new Error('Connected node not found in node list');
-        }
-
-        if (isMounted) {
-          setConnectedNode(thisNode);
-        }
-      } catch (err: any) {
-        console.log('Failed to fetch connected node', err);
-        if (isMounted) {
-          setError(err.message || 'Cannot connect to mesh node');
-        }
-      } finally {
-        if (isMounted) setLoading(false);
+  const fetchData = useCallback(async () => {
+    try {
+      setLoading(true);
+      const statusRes = await api.get('/api/status', { timeout: 3000 });
+      if (statusRes.status !== 200) {
+        throw new Error('Unable to reach mesh node');
       }
-    };
+      const localNodeId = statusRes.data.node_id;
+      setConnectedNodeId(localNodeId);
 
-    fetchConnectedNode();
-    return () => {
-      isMounted = false;
-    };
+      const nodesRes = await api.get('/api/nodes');
+      const allNodes: MeshNode[] = nodesRes.data;
+
+      if (allNodes.length === 0) {
+        throw new Error('No mesh nodes found');
+      }
+
+      setNodes(allNodes);
+      setError(null);
+    } catch (err: any) {
+      console.log('Failed to fetch mesh data', err);
+      setError(err.message || 'Cannot connect to mesh');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchData();
+    }, [fetchData])
+  );
+
   const renderNode = useCallback(
-    ({ item }: { item: MeshNode }) => (
-      <TouchableOpacity
-        style={[styles.card, item.distress && styles.distressCard]}
-        onPress={() =>
-          rootNavigation.navigate('MeshNodeChat', {
-            nodeName: item.name, // Pass the raw name from the API
-            users: item.users,
-          })
-        }
-      >
-        {item.distress && <View style={styles.distressBar} />}
-        <View style={styles.content}>
-          <Text style={styles.name}>{item.name}</Text>
-          <View style={styles.row}>
-            <Ionicons name="people-outline" size={14} color="#666" />
-            <Text style={styles.info}>{item.users}</Text>
-            <Ionicons name="wifi-outline" size={14} color="#666" />
-            <Text style={styles.info}>{item.signal}</Text>
+    ({ item }: { item: MeshNode }) => {
+      const isConnected = item.id === connectedNodeId;
+      const active = isNodeActive(item);
+      return (
+        <TouchableOpacity
+          style={[
+            styles.card,
+            item.distress && styles.distressCard,
+            !active && styles.inactiveCard,
+          ]}
+          onPress={() =>
+            rootNavigation.navigate('MeshNodeChat', {
+              nodeId: item.id,
+              nodeName: item.name,
+              users: item.users,
+            })
+          }
+        >
+          {item.distress && <View style={styles.distressBar} />}
+          <View style={styles.content}>
+            <View style={styles.nameRow}>
+              <Text style={[styles.name, !active && styles.inactiveText]}>
+                {item.name}
+              </Text>
+              {!active && (
+                <Text style={styles.inactiveBadge}>inactive</Text>
+              )}
+              {isConnected && (
+                <View style={styles.connectedBadge}>
+                  <Text style={styles.connectedText}>●</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.row}>
+              <Ionicons name="people-outline" size={14} color="#666" />
+              <Text style={styles.info}>{item.users}</Text>
+              <Ionicons name="wifi-outline" size={14} color="#666" />
+              <Text style={styles.info}>{item.signal}</Text>
+            </View>
           </View>
-        </View>
-        <Ionicons name="chevron-forward-outline" size={18} color="#bbb" />
-      </TouchableOpacity>
-    ),
-    [rootNavigation]
+          <Ionicons name="chevron-forward-outline" size={18} color="#bbb" />
+        </TouchableOpacity>
+      );
+    },
+    [connectedNodeId, rootNavigation]
   );
 
   if (loading) {
@@ -96,13 +128,15 @@ const MainChatScreen = memo(() => {
     );
   }
 
-  if (error || !connectedNode) {
+  if (error) {
     return (
       <MainLayout activeTab="chat">
         <View style={styles.center}>
           <Ionicons name="wifi-outline" size={48} color="#aaa" />
           <Text style={styles.errorText}>Not connected to any mesh node.</Text>
-          <Text style={styles.errorSubText}>Please connect to the ResQMesh WiFi hotspot.</Text>
+          <Text style={styles.errorSubText}>
+            Please connect to the ResQMesh WiFi hotspot.
+          </Text>
         </View>
       </MainLayout>
     );
@@ -111,16 +145,12 @@ const MainChatScreen = memo(() => {
   return (
     <MainLayout activeTab="chat">
       <FlatList
-        data={[connectedNode]}
+        data={nodes}
         keyExtractor={(item) => item.id}
         renderItem={renderNode}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={<WelcomeCard />}
         contentContainerStyle={styles.listContent}
-        initialNumToRender={1}
-        maxToRenderPerBatch={1}
-        windowSize={5}
-        removeClippedSubviews
       />
     </MainLayout>
   );
@@ -141,6 +171,10 @@ const styles = StyleSheet.create({
   distressCard: {
     backgroundColor: '#fff5f5',
   },
+  inactiveCard: {
+    opacity: 0.6,
+    backgroundColor: '#f5f5f5',
+  },
   distressBar: {
     position: 'absolute',
     left: 0,
@@ -154,11 +188,41 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
   },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    flexWrap: 'wrap',
+  },
   name: {
     fontSize: 16,
     fontWeight: '600',
     color: '#111',
-    marginBottom: 6,
+    marginRight: 8,
+  },
+  inactiveText: {
+    color: '#888',
+  },
+  inactiveBadge: {
+    fontSize: 10,
+    color: '#888',
+    backgroundColor: '#e0e0e0',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 10,
+    marginRight: 6,
+    overflow: 'hidden',
+  },
+  connectedBadge: {
+    backgroundColor: '#4caf50',
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  connectedText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   row: {
     flexDirection: 'row',
