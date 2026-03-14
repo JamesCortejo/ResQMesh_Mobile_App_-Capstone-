@@ -81,6 +81,7 @@ const CivilianLoginScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Phone Number"
+            placeholderTextColor="#666"
             keyboardType="phone-pad"
             value={phone}
             onChangeText={(text) => {
@@ -97,6 +98,7 @@ const CivilianLoginScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Password"
+            placeholderTextColor="#666"
             secureTextEntry
             value={password}
             onChangeText={(text) => {

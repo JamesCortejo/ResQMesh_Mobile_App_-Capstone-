@@ -79,6 +79,7 @@ const RescuerLoginScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Rescuer ID / Phone"
+            placeholderTextColor="#666"
             value={rescuerId}
             onChangeText={(text) => {
               setRescuerId(text);
@@ -94,6 +95,7 @@ const RescuerLoginScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Password"
+            placeholderTextColor="#666"
             secureTextEntry
             value={password}
             onChangeText={(text) => {

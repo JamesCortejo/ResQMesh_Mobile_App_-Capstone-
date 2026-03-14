@@ -229,7 +229,7 @@ const MapScreen = () => {
               {/* Node Markers */}
               {nodes.map((node) => {
                 const extractedNumber = parseInt(
-                  node.nodeNumber.replace(/\D/g, ''),
+                  node.id.replace(/\D/g, ''),
                   10
                 );
 

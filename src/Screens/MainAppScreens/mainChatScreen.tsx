@@ -6,6 +6,7 @@ import {
   View,
   StyleSheet,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -17,245 +18,406 @@ import api from '../../services/api';
 import { NODE_INACTIVE_TIMEOUT_MS } from '../../constants/timeouts';
 
 const MainChatScreen = memo(() => {
+
   const rootNavigation = useRootNavigation();
+
   const [nodes, setNodes] = useState<MeshNode[]>([]);
   const [connectedNodeId, setConnectedNodeId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const isNodeActive = (node: MeshNode) => {
-  // If this is the node we are directly connected to, it's definitely active
-  if (node.id === connectedNodeId) return true;
 
-  if (!node.lastSeen) return false;
-  const lastSeenTime = new Date(node.lastSeen).getTime();
-  return Date.now() - lastSeenTime < NODE_INACTIVE_TIMEOUT_MS;
-};
+  const isNodeActive = (node: MeshNode) => {
+    if (node.id === connectedNodeId) return true;
+
+    if (!node.lastSeen) return false;
+
+    const lastSeen = new Date(node.lastSeen).getTime();
+
+    return Date.now() - lastSeen < NODE_INACTIVE_TIMEOUT_MS;
+  };
+
+
+  const formatDistance = (km?: number | null) => {
+
+    if (km === null || km === undefined) return 'N/A';
+
+    if (km < 0.001) return 'Here';
+
+    if (km < 1) return `${Math.round(km * 1000)} m`;
+
+    return `${km.toFixed(2)} km`;
+  };
+
+
+  /* ------------------------------------------------ */
+  /* SIGNAL STRENGTH CIRCLES                          */
+  /* ------------------------------------------------ */
+
+  const getSignalLevel = (rssi?: number | null) => {
+
+    if (rssi === null || rssi === undefined) return 0;
+
+    if (rssi >= -70) return 4;
+    if (rssi >= -85) return 3;
+    if (rssi >= -100) return 2;
+
+    return 1;
+  };
+
+
+  const getSignalColor = (level: number) => {
+
+    switch (level) {
+
+      case 4:
+        return '#2ecc71'; // green
+
+      case 3:
+        return '#f1c40f'; // yellow
+
+      case 2:
+        return '#e67e22'; // orange
+
+      case 1:
+        return '#e74c3c'; // red
+
+      default:
+        return '#999';
+    }
+  };
+
+
+  const renderSignalCircles = (rssi?: number | null) => {
+
+    const level = getSignalLevel(rssi);
+    const color = getSignalColor(level);
+
+    return (
+
+      <View style={styles.signalWrapper}>
+
+        <Ionicons name="radio-outline" size={14} color="#666" />
+
+        <Text style={styles.info}>{rssi ?? 'N/A'}</Text>
+
+        <View style={styles.circleRow}>
+
+          {[0,1,2,3].map((i) => (
+
+            <View
+              key={i}
+              style={[
+                styles.signalCircle,
+                {
+                  backgroundColor: i < level ? color : '#ddd'
+                }
+              ]}
+            />
+
+          ))}
+
+        </View>
+
+      </View>
+    );
+  };
+
 
   const fetchData = useCallback(async () => {
+
     try {
+
       setLoading(true);
+
       const statusRes = await api.get('/api/status', { timeout: 3000 });
-      if (statusRes.status !== 200) {
-        throw new Error('Unable to reach mesh node');
-      }
+
       const localNodeId = statusRes.data.node_id;
+
       setConnectedNodeId(localNodeId);
 
       const nodesRes = await api.get('/api/nodes');
-      const allNodes: MeshNode[] = nodesRes.data;
 
-      if (allNodes.length === 0) {
-        throw new Error('No mesh nodes found');
-      }
+      let allNodes: MeshNode[] = nodesRes.data;
+
+      allNodes.sort((a, b) => {
+
+        if (a.id === localNodeId) return -1;
+
+        if (b.id === localNodeId) return 1;
+
+        return 0;
+
+      });
 
       setNodes(allNodes);
+
       setError(null);
+
     } catch (err: any) {
-      console.log('Failed to fetch mesh data', err);
-      setError(err.message || 'Cannot connect to mesh');
+
+      console.log(err);
+
+      setError('Cannot connect to mesh');
+
     } finally {
+
       setLoading(false);
+
     }
+
   }, []);
 
+
   useEffect(() => {
+
     fetchData();
+
   }, [fetchData]);
 
+
   useFocusEffect(
+
     useCallback(() => {
+
       fetchData();
+
     }, [fetchData])
+
   );
 
-  const renderNode = useCallback(
-    ({ item }: { item: MeshNode }) => {
-      const isConnected = item.id === connectedNodeId;
-      const active = isNodeActive(item);
-      return (
-        <TouchableOpacity
-          style={[
-            styles.card,
-            item.distress && styles.distressCard,
-            !active && styles.inactiveCard,
-          ]}
-          onPress={() =>
-            rootNavigation.navigate('MeshNodeChat', {
-              nodeId: item.id,
-              nodeName: item.name,
-              users: item.users,
-            })
-          }
-        >
-          {item.distress && <View style={styles.distressBar} />}
-          <View style={styles.content}>
-            <View style={styles.nameRow}>
-              <Text style={[styles.name, !active && styles.inactiveText]}>
-                {item.name}
-              </Text>
-              {!active && (
-                <Text style={styles.inactiveBadge}>inactive</Text>
-              )}
-              {isConnected && (
-                <View style={styles.connectedBadge}>
-                  <Text style={styles.connectedText}>●</Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.row}>
-              <Ionicons name="people-outline" size={14} color="#666" />
-              <Text style={styles.info}>{item.users}</Text>
-              <Ionicons name="wifi-outline" size={14} color="#666" />
-              <Text style={styles.info}>{item.signal}</Text>
-            </View>
+
+  const renderNode = ({ item }: { item: MeshNode }) => {
+
+    const active = isNodeActive(item);
+
+    const isConnected = item.id === connectedNodeId;
+
+
+    const handlePress = () => {
+
+      if (!active) {
+
+        Alert.alert('Mesh Node Inactive', 'This mesh node is inactive.');
+
+        return;
+      }
+
+      rootNavigation.navigate('MeshNodeChat', {
+
+        nodeId: item.id,
+        nodeName: item.name,
+        users: item.users
+
+      });
+
+    };
+
+
+    return (
+
+      <TouchableOpacity
+        style={[
+          styles.card,
+          isConnected && styles.connectedCard,
+          !active && styles.inactiveCard
+        ]}
+        onPress={handlePress}
+      >
+
+        <View style={styles.content}>
+
+          <Text style={styles.name}>{item.name}</Text>
+
+          <View style={styles.row}>
+
+            <Ionicons name="people-outline" size={14} color="#666" />
+            <Text style={styles.info}>{item.users}</Text>
+
+             <Text style={styles.separator}>|</Text>
+
+            {renderSignalCircles(item.signal)}
+
+             <Text style={styles.separator}>|</Text>
+
+            <Ionicons name="location-outline" size={14} color="#666" />
+            <Text style={styles.info}>{formatDistance(item.distance)}</Text>
+
           </View>
-          <Ionicons name="chevron-forward-outline" size={18} color="#bbb" />
-        </TouchableOpacity>
-      );
-    },
-    [connectedNodeId, rootNavigation]
-  );
+
+        </View>
+
+        <Ionicons name="chevron-forward-outline" size={18} color="#bbb" />
+
+      </TouchableOpacity>
+    );
+  };
+
 
   if (loading) {
+
     return (
+
       <MainLayout activeTab="chat">
+
         <View style={styles.center}>
+
           <ActivityIndicator size="large" color="#1e88e5" />
+
           <Text style={styles.loadingText}>Connecting to mesh...</Text>
+
         </View>
+
       </MainLayout>
+
     );
   }
+
 
   if (error) {
+
     return (
+
       <MainLayout activeTab="chat">
+
         <View style={styles.center}>
+
           <Ionicons name="wifi-outline" size={48} color="#aaa" />
-          <Text style={styles.errorText}>Not connected to any mesh node.</Text>
-          <Text style={styles.errorSubText}>
-            Please connect to the ResQMesh WiFi hotspot.
-          </Text>
+
+          <Text style={styles.errorText}>Not connected to mesh</Text>
+
         </View>
+
       </MainLayout>
+
     );
   }
 
+
   return (
+
     <MainLayout activeTab="chat">
+
       <FlatList
         data={nodes}
         keyExtractor={(item) => item.id}
         renderItem={renderNode}
-        showsVerticalScrollIndicator={false}
         ListHeaderComponent={<WelcomeCard />}
-        contentContainerStyle={styles.listContent}
       />
+
     </MainLayout>
+
   );
+
 });
 
+
 const styles = StyleSheet.create({
-  listContent: {
-    paddingBottom: 8,
-  },
+
   card: {
+
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#fff',
     borderRadius: 14,
     padding: 16,
-    marginBottom: 14,
+    marginBottom: 14
+
   },
-  distressCard: {
-    backgroundColor: '#fff5f5',
+
+  connectedCard: {
+
+    borderWidth: 2,
+    borderColor: '#4caf50'
+
   },
+
+  separator: {
+    color: '#999',
+    fontSize: 14,
+    marginHorizontal: 4
+  },
+
   inactiveCard: {
-    opacity: 0.6,
-    backgroundColor: '#f5f5f5',
+
+    opacity: 0.5
+
   },
-  distressBar: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 4,
-    backgroundColor: '#d32f2f',
-    borderTopLeftRadius: 14,
-    borderBottomLeftRadius: 14,
-  },
+
   content: {
-    flex: 1,
+
+    flex: 1
+
   },
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 6,
-    flexWrap: 'wrap',
-  },
+
   name: {
+
     fontSize: 16,
     fontWeight: '600',
-    color: '#111',
-    marginRight: 8,
+    marginBottom: 6
+
   },
-  inactiveText: {
-    color: '#888',
-  },
-  inactiveBadge: {
-    fontSize: 10,
-    color: '#888',
-    backgroundColor: '#e0e0e0',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 10,
-    marginRight: 6,
-    overflow: 'hidden',
-  },
-  connectedBadge: {
-    backgroundColor: '#4caf50',
-    borderRadius: 10,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  connectedText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
+
   row: {
+
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 10
+
   },
+
   info: {
+
     fontSize: 13,
-    color: '#666',
+    color: '#666'
+
   },
+
+  signalWrapper: {
+
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6
+
+  },
+
+  circleRow: {
+
+    flexDirection: 'row',
+    gap: 4
+
+  },
+
+  signalCircle: {
+
+    width: 8,
+    height: 8,
+    borderRadius: 4
+
+  },
+
   center: {
+
     flex: 1,
     justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
+    alignItems: 'center'
+
   },
+
   loadingText: {
-    marginTop: 12,
-    fontSize: 16,
-    color: '#555',
+
+    marginTop: 10,
+    color: '#666'
+
   },
+
   errorText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#555',
-    marginTop: 12,
-  },
-  errorSubText: {
-    fontSize: 14,
-    color: '#888',
-    textAlign: 'center',
-    marginTop: 8,
-  },
+
+    marginTop: 10,
+    fontSize: 16
+
+  }
+
 });
 
 export default MainChatScreen;

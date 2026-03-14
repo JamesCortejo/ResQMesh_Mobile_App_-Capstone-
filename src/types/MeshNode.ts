@@ -1,12 +1,19 @@
 export interface MeshNode {
   id: string;
-  nodeNumber: number;
   name: string;
-  latitude: number;
-  longitude: number;
+
+  latitude?: number | null;
+  longitude?: number | null;
+
   status: 'active' | 'offline';
+
   distress: boolean;
+
   users: number;
-  signal: string;
-  lastSeen?: string;        // 👈 add this line
+
+  signal?: number | null;
+
+  distance?: number | null;
+
+  lastSeen?: string;
 }

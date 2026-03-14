@@ -120,6 +120,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="First Name *"
+            placeholderTextColor="#666"
             value={firstName}
             onChangeText={(text) => {
               setFirstName(text);
@@ -136,6 +137,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Middle Name"
+            placeholderTextColor="#666"
             value={middleName}
             onChangeText={setMiddleName}
             editable={!loading}
@@ -148,6 +150,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Last Name *"
+            placeholderTextColor="#666"
             value={lastName}
             onChangeText={(text) => {
               setLastName(text);
@@ -164,6 +167,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Age *"
+            placeholderTextColor="#666"
             keyboardType="numeric"
             value={age}
             onChangeText={(text) => {
@@ -181,6 +185,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Address *"
+            placeholderTextColor="#666"
             value={address}
             onChangeText={(text) => {
               setAddress(text);
@@ -198,6 +203,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Phone Number *"
+            placeholderTextColor="#666"
             keyboardType="phone-pad"
             value={phone}
             onChangeText={(text) => {
@@ -215,6 +221,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Occupation"
+            placeholderTextColor="#666"
             value={occupation}
             onChangeText={setOccupation}
             editable={!loading}
@@ -248,6 +255,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Password *"
+            placeholderTextColor="#666"
             secureTextEntry
             value={password}
             onChangeText={(text) => {
@@ -265,6 +273,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
           <TextInput
             style={styles.input}
             placeholder="Confirm Password *"
+            placeholderTextColor="#666"
             secureTextEntry
             value={confirmPassword}
             onChangeText={(text) => {
