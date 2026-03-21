@@ -8,11 +8,11 @@ interface MeshNode {
   name: string;
   latitude: number;
   longitude: number;
-  status: string; // 'active' or 'offline' (from backend)
+  status: string;
   users: number;
   signal: string;
   distress: boolean;
-  lastSeen?: string; // ISO string
+  lastSeen?: string;
 }
 
 interface DistressDetail {
@@ -36,7 +36,7 @@ interface DistressDetail {
 interface NodeInfoCardProps {
   node: MeshNode;
   distressDetails: DistressDetail | null;
-  active?: boolean; // if not provided, fallback to node.status === 'active'
+  active?: boolean;
   onClose: () => void;
 }
 
@@ -46,7 +46,7 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
   active,
   onClose,
 }) => {
-  // Determine if node is considered online based on active prop (from lastSeen)
+  // Determine if node is considered online based on active prop
   const isActive = active !== undefined ? active : node.status === 'active';
 
   // Choose colours based on state
@@ -55,25 +55,26 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
   let titleColor = '#111';
 
   if (!isActive) {
-    // Inactive node (gray)
     borderColor = '#9e9e9e';
     iconColor = '#9e9e9e';
     titleColor = '#9e9e9e';
   } else if (node.distress) {
-    // Active and in distress (red)
     borderColor = '#d32f2f';
     iconColor = '#d32f2f';
     titleColor = '#d32f2f';
   } else {
-    // Active normal (blue)
     borderColor = '#1e88e5';
     iconColor = '#1e88e5';
     titleColor = '#1e88e5';
   }
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleString();
+    try {
+      const date = new Date(dateString);
+      return date.toLocaleString();
+    } catch {
+      return 'Invalid date';
+    }
   };
 
   const renderContent = () => {
@@ -104,16 +105,16 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
               <View style={styles.row}>
                 <Ionicons name="person-outline" size={16} color="#9e9e9e" />
                 <Text style={styles.staleText}>
-                  Victim: {distressDetails.user.firstName} {distressDetails.user.lastName}
+                  Victim: {distressDetails.user?.firstName || '?'} {distressDetails.user?.lastName || ''}
                 </Text>
               </View>
               <View style={styles.row}>
                 <Ionicons name="call-outline" size={16} color="#9e9e9e" />
-                <Text style={styles.staleText}>Phone: {distressDetails.user.phone}</Text>
+                <Text style={styles.staleText}>Phone: {distressDetails.user?.phone || 'N/A'}</Text>
               </View>
               <View style={styles.row}>
                 <Ionicons name="alert-circle-outline" size={16} color="#9e9e9e" />
-                <Text style={styles.staleText}>Emergency: {distressDetails.reason}</Text>
+                <Text style={styles.staleText}>Emergency: {distressDetails.reason || 'Unknown'}</Text>
               </View>
               <View style={styles.row}>
                 <Ionicons name="time-outline" size={16} color="#9e9e9e" />
@@ -129,7 +130,7 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
 
     // ----- ACTIVE NODE -----
     if (node.distress) {
-      // Distressed state (requires distressDetails)
+      // Distressed state – show loading if details not yet available
       if (!distressDetails) {
         return (
           <View style={styles.row}>
@@ -138,6 +139,7 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
           </View>
         );
       }
+      // Safely render distress details
       return (
         <>
           <View style={[styles.row, styles.distressHeader]}>
@@ -147,25 +149,25 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
           <View style={styles.row}>
             <Ionicons name="person-outline" size={16} color="#d32f2f" />
             <Text style={styles.distressText}>
-              Victim: {distressDetails.user.firstName} {distressDetails.user.lastName}
+              Victim: {distressDetails.user?.firstName || '?'} {distressDetails.user?.lastName || ''}
             </Text>
           </View>
           <View style={styles.row}>
             <Ionicons name="call-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>Phone: {distressDetails.user.phone}</Text>
+            <Text style={styles.distressText}>Phone: {distressDetails.user?.phone || 'N/A'}</Text>
           </View>
           <View style={styles.row}>
             <Ionicons name="water-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>Blood Type: {distressDetails.user.bloodType || 'Unknown'}</Text>
+            <Text style={styles.distressText}>Blood Type: {distressDetails.user?.bloodType || 'Unknown'}</Text>
           </View>
           <View style={styles.row}>
             <Ionicons name="alert-circle-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>Emergency: {distressDetails.reason}</Text>
+            <Text style={styles.distressText}>Emergency: {distressDetails.reason || 'Unknown'}</Text>
           </View>
           <View style={styles.row}>
             <Ionicons name="location-outline" size={16} color="#d32f2f" />
             <Text style={styles.distressText}>
-              Coordinates: {distressDetails.lat.toFixed(5)}, {distressDetails.lng.toFixed(5)}
+              Coordinates: {distressDetails.lat?.toFixed(5) ?? '?'}, {distressDetails.lng?.toFixed(5) ?? '?'}
             </Text>
           </View>
           <View style={styles.row}>
@@ -192,7 +194,7 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
         <View style={styles.row}>
           <Ionicons name="location-outline" size={16} color="#1e88e5" />
           <Text style={styles.infoText}>
-            Coordinates: {node.latitude.toFixed(5)}, {node.longitude.toFixed(5)}
+            Coordinates: {node.latitude?.toFixed(5) ?? '?'}, {node.longitude?.toFixed(5) ?? '?'}
           </Text>
         </View>
         {node.lastSeen && (

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, memo } from 'react';
+import React, { useState, useCallback, useEffect, useRef, memo } from 'react'
 import {
   FlatList,
   TouchableOpacity,
@@ -7,417 +7,425 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
-} from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useFocusEffect } from '@react-navigation/native';
-import MainLayout from '../../layouts/MainLayout';
-import WelcomeCard from '../../components/WelcomeCard';
-import { MeshNode } from '../../types/MeshNode';
-import { useRootNavigation } from '../../hooks/useRootNavigation';
-import api from '../../services/api';
-import { NODE_INACTIVE_TIMEOUT_MS } from '../../constants/timeouts';
+  Animated
+} from 'react-native'
+import { Ionicons } from '@expo/vector-icons'
+import { useFocusEffect } from '@react-navigation/native'
+import MainLayout from '../../layouts/MainLayout'
+import WelcomeCard from '../../components/WelcomeCard'
+import { MeshNode } from '../../types/MeshNode'
+import { useRootNavigation } from '../../hooks/useRootNavigation'
+import api from '../../services/api'
+import { NODE_INACTIVE_TIMEOUT_MS } from '../../constants/timeouts'
 
 const MainChatScreen = memo(() => {
 
-  const rootNavigation = useRootNavigation();
+  const rootNavigation = useRootNavigation()
 
-  const [nodes, setNodes] = useState<MeshNode[]>([]);
-  const [connectedNodeId, setConnectedNodeId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [nodes, setNodes] = useState<MeshNode[]>([])
+  const [connectedNodeId, setConnectedNodeId] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
 
+  const glowAnim = useRef(new Animated.Value(0)).current
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(glowAnim, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: false
+        }),
+        Animated.timing(glowAnim, {
+          toValue: 0,
+          duration: 1200,
+          useNativeDriver: false
+        })
+      ])
+    ).start()
+  }, [])
 
   const isNodeActive = (node: MeshNode) => {
-    if (node.id === connectedNodeId) return true;
+    if (node.id === connectedNodeId) return true
+    if (!node.lastSeen) return false
+    const lastSeen = new Date(node.lastSeen).getTime()
+    return Date.now() - lastSeen < NODE_INACTIVE_TIMEOUT_MS
+  }
 
-    if (!node.lastSeen) return false;
-
-    const lastSeen = new Date(node.lastSeen).getTime();
-
-    return Date.now() - lastSeen < NODE_INACTIVE_TIMEOUT_MS;
-  };
-
-
-  const formatDistance = (km?: number | null) => {
-
-    if (km === null || km === undefined) return 'N/A';
-
-    if (km < 0.001) return 'Here';
-
-    if (km < 1) return `${Math.round(km * 1000)} m`;
-
-    return `${km.toFixed(2)} km`;
-  };
-
-
-  /* ------------------------------------------------ */
-  /* SIGNAL STRENGTH CIRCLES                          */
-  /* ------------------------------------------------ */
+  const formatDistance = (meters?: number | null) => {
+    if (meters === null || meters === undefined) return 'N/A'
+    if (meters < 1) return 'Here'
+    if (meters < 1000) return `${Math.round(meters)} m`
+    return `${(meters / 1000).toFixed(2)} km`
+  }
 
   const getSignalLevel = (rssi?: number | null) => {
-
-    if (rssi === null || rssi === undefined) return 0;
-
-    if (rssi >= -70) return 4;
-    if (rssi >= -85) return 3;
-    if (rssi >= -100) return 2;
-
-    return 1;
-  };
-
+    if (rssi === null || rssi === undefined) return 0
+    if (rssi >= -70) return 4
+    if (rssi >= -85) return 3
+    if (rssi >= -100) return 2
+    return 1
+  }
 
   const getSignalColor = (level: number) => {
-
     switch (level) {
-
-      case 4:
-        return '#2ecc71'; // green
-
-      case 3:
-        return '#f1c40f'; // yellow
-
-      case 2:
-        return '#e67e22'; // orange
-
-      case 1:
-        return '#e74c3c'; // red
-
-      default:
-        return '#999';
+      case 4: return '#2ecc71'
+      case 3: return '#f1c40f'
+      case 2: return '#e67e22'
+      case 1: return '#e74c3c'
+      default: return '#999'
     }
-  };
+  }
 
+  const renderSignalCircles = (rssi?: number | null, nodeId?: string) => {
+    if (nodeId === connectedNodeId) {
+      return (
+        <View style={styles.signalWrapper}>
+          <Ionicons name="radio-outline" size={14} color="#4caf50" />
+          <Text style={[styles.info, { color: '#4caf50', fontWeight: '600' }]}>
+            Connected
+          </Text>
+        </View>
+      )
+    }
 
-  const renderSignalCircles = (rssi?: number | null) => {
-
-    const level = getSignalLevel(rssi);
-    const color = getSignalColor(level);
+    const level = getSignalLevel(rssi)
+    const color = getSignalColor(level)
 
     return (
-
       <View style={styles.signalWrapper}>
-
         <Ionicons name="radio-outline" size={14} color="#666" />
-
         <Text style={styles.info}>{rssi ?? 'N/A'}</Text>
-
         <View style={styles.circleRow}>
-
-          {[0,1,2,3].map((i) => (
-
+          {[0, 1, 2, 3].map((i) => (
             <View
               key={i}
               style={[
                 styles.signalCircle,
-                {
-                  backgroundColor: i < level ? color : '#ddd'
-                }
+                { backgroundColor: i < level ? color : '#ddd' }
               ]}
             />
-
           ))}
-
         </View>
-
       </View>
-    );
-  };
+    )
+  }
 
-
-  const fetchData = useCallback(async () => {
-
+  const loadNodes = useCallback(async () => {
     try {
+      const statusRes = await api.get('/api/status', { timeout: 3000 })
+      const localNodeId = statusRes.data.node_id
+      setConnectedNodeId(localNodeId)
 
-      setLoading(true);
-
-      const statusRes = await api.get('/api/status', { timeout: 3000 });
-
-      const localNodeId = statusRes.data.node_id;
-
-      setConnectedNodeId(localNodeId);
-
-      const nodesRes = await api.get('/api/nodes');
-
-      let allNodes: MeshNode[] = nodesRes.data;
+      const nodesRes = await api.get('/api/nodes')
+      const allNodes: MeshNode[] = nodesRes.data.map((node: any) => ({
+        ...node,
+        distress: node.distress === true,
+        distanceMeters: node.distanceMeters ?? null
+      }))
 
       allNodes.sort((a, b) => {
+        if (a.id === localNodeId) return -1
+        if (b.id === localNodeId) return 1
+        return 0
+      })
 
-        if (a.id === localNodeId) return -1;
-
-        if (b.id === localNodeId) return 1;
-
-        return 0;
-
-      });
-
-      setNodes(allNodes);
-
-      setError(null);
-
-    } catch (err: any) {
-
-      console.log(err);
-
-      setError('Cannot connect to mesh');
-
-    } finally {
-
-      setLoading(false);
-
+      setNodes(allNodes)
+      setError(null)
+    } catch (err) {
+      console.log('loadNodes error', err)
+      setError('Cannot connect to mesh')
     }
+  }, [])
 
-  }, []);
+  const fetchUnreadCounts = useCallback(async () => {
+    try {
+      const response = await api.get('/api/messages/unread')
+      setUnreadCounts(response.data)
+    } catch (err) {
+      console.error('Failed to fetch unread counts', err)
+    }
+  }, [])
 
+  const initialLoad = useCallback(async () => {
+    setLoading(true)
+    await loadNodes()
+    await fetchUnreadCounts()
+    setLoading(false)
+  }, [loadNodes, fetchUnreadCounts])
 
   useEffect(() => {
-
-    fetchData();
-
-  }, [fetchData]);
-
+    initialLoad()
+    const interval = setInterval(() => {
+      loadNodes()
+      fetchUnreadCounts()
+    }, 10000)
+    return () => clearInterval(interval)
+  }, [initialLoad, loadNodes, fetchUnreadCounts])
 
   useFocusEffect(
-
     useCallback(() => {
+      loadNodes()
+      fetchUnreadCounts()
+    }, [loadNodes, fetchUnreadCounts])
+  )
 
-      fetchData();
+  // Special broadcast node
+  const broadcastNode: MeshNode = {
+    id: 'BROADCAST',
+    name: 'Broadcast Channel',
+    users: 0,
+    distress: false,
+    lastSeen: new Date().toISOString(),
+    signal: null,
+    distanceMeters: null
+  }
 
-    }, [fetchData])
-
-  );
-
+  const data = [broadcastNode, ...nodes]
 
   const renderNode = ({ item }: { item: MeshNode }) => {
+    if (!item) return null
 
-    const active = isNodeActive(item);
+    const isBroadcast = item.id === 'BROADCAST'
+    const active = isBroadcast ? true : isNodeActive(item)
+    const isConnected = item.id === connectedNodeId
 
-    const isConnected = item.id === connectedNodeId;
+    let stateLabel = ''
+    let stateColor = ''
 
+    if (!active) {
+      stateLabel = 'INACTIVE'
+      stateColor = '#9e9e9e'
+    } else if (item.distress) {
+      stateLabel = 'DISTRESS'
+      stateColor = '#d32f2f'
+    } else {
+      stateLabel = 'ACTIVE'
+      stateColor = '#4caf50'
+    }
+
+    const animatedBackground = glowAnim.interpolate({
+      inputRange: [0, 1],
+      outputRange: ['rgba(255,0,0,0.05)', 'rgba(255,0,0,0.22)']
+    })
 
     const handlePress = () => {
-
-      if (!active) {
-
-        Alert.alert('Mesh Node Inactive', 'This mesh node is inactive.');
-
-        return;
+      if (!active && !isBroadcast) {
+        Alert.alert('Mesh Node Inactive', 'This mesh node is inactive.')
+        return
       }
 
-      rootNavigation.navigate('MeshNodeChat', {
+      if (isBroadcast) {
+        rootNavigation.navigate('MeshNodeChat', {
+          nodeId: 'BROADCAST',
+          nodeName: 'Broadcast Channel',
+          users: 0
+        })
+      } else {
+        rootNavigation.navigate('MeshNodeChat', {
+          nodeId: item.id,
+          nodeName: item.name,
+          users: item.users ?? 0
+        })
+      }
+    }
 
-        nodeId: item.id,
-        nodeName: item.name,
-        users: item.users
-
-      });
-
-    };
-
+    const unreadCount = unreadCounts[item.id] || 0
 
     return (
-
-      <TouchableOpacity
+      <Animated.View
         style={[
           styles.card,
+          item.distress && !isBroadcast && { backgroundColor: animatedBackground },
           isConnected && styles.connectedCard,
-          !active && styles.inactiveCard
+          !active && !isBroadcast && styles.inactiveCard
         ]}
-        onPress={handlePress}
       >
+        <TouchableOpacity style={styles.cardContent} onPress={handlePress}>
+          <View style={styles.content}>
+            <View style={styles.nameRow}>
+              <Ionicons
+                name={isBroadcast ? 'megaphone' : 'hardware-chip-outline'}
+                size={16}
+                color={isBroadcast ? '#007aff' : '#333'}
+              />
+              <Text style={styles.nodeId}> {item.id}</Text>
+              <Text style={styles.name}> - {item.name}</Text>
+              {!isBroadcast && (
+                <View style={[styles.stateBadge, { backgroundColor: stateColor }]}>
+                  <Text style={styles.stateText}>{stateLabel}</Text>
+                </View>
+              )}
+              {unreadCount > 0 && (
+                <View style={styles.unreadBadge}>
+                  <Text style={styles.unreadText}>{unreadCount}</Text>
+                </View>
+              )}
+            </View>
 
-        <View style={styles.content}>
-
-          <Text style={styles.name}>{item.name}</Text>
-
-          <View style={styles.row}>
-
-            <Ionicons name="people-outline" size={14} color="#666" />
-            <Text style={styles.info}>{item.users}</Text>
-
-             <Text style={styles.separator}>|</Text>
-
-            {renderSignalCircles(item.signal)}
-
-             <Text style={styles.separator}>|</Text>
-
-            <Ionicons name="location-outline" size={14} color="#666" />
-            <Text style={styles.info}>{formatDistance(item.distance)}</Text>
-
+            <View style={styles.row}>
+              {!isBroadcast ? (
+                <>
+                  <Ionicons name="people-outline" size={14} color="#666" />
+                  <Text style={styles.info}>{item.users ?? 0}</Text>
+                  <Text style={styles.separator}>|</Text>
+                  {renderSignalCircles(item.signal, item.id)}
+                  <Text style={styles.separator}>|</Text>
+                  <Ionicons name="location-outline" size={14} color="#666" />
+                  <Text style={styles.info}>
+                    {formatDistance(item.distanceMeters)}
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.info}>Send a message to all nodes</Text>
+              )}
+            </View>
           </View>
-
-        </View>
-
-        <Ionicons name="chevron-forward-outline" size={18} color="#bbb" />
-
-      </TouchableOpacity>
-    );
-  };
-
+          <Ionicons name="chevron-forward-outline" size={18} color="#bbb" />
+        </TouchableOpacity>
+      </Animated.View>
+    )
+  }
 
   if (loading) {
-
     return (
-
       <MainLayout activeTab="chat">
-
         <View style={styles.center}>
-
           <ActivityIndicator size="large" color="#1e88e5" />
-
           <Text style={styles.loadingText}>Connecting to mesh...</Text>
-
         </View>
-
       </MainLayout>
-
-    );
+    )
   }
 
-
-  if (error) {
-
+  if (error && nodes.length === 0) {
     return (
-
       <MainLayout activeTab="chat">
-
         <View style={styles.center}>
-
           <Ionicons name="wifi-outline" size={48} color="#aaa" />
-
           <Text style={styles.errorText}>Not connected to mesh</Text>
-
         </View>
-
       </MainLayout>
-
-    );
+    )
   }
-
 
   return (
-
     <MainLayout activeTab="chat">
-
       <FlatList
-        data={nodes}
+        data={data}
         keyExtractor={(item) => item.id}
         renderItem={renderNode}
         ListHeaderComponent={<WelcomeCard />}
       />
-
     </MainLayout>
-
-  );
-
-});
-
+  )
+})
 
 const styles = StyleSheet.create({
-
   card: {
-
+    borderRadius: 14,
+    marginBottom: 14,
+    backgroundColor: '#fff'
+  },
+  cardContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 14
-
+    padding: 16
   },
-
   connectedCard: {
-
     borderWidth: 2,
     borderColor: '#4caf50'
-
   },
-
+  inactiveCard: {
+    opacity: 0.5
+  },
+  content: {
+    flex: 1
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginBottom: 6
+  },
+  nodeId: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#333'
+  },
+  name: {
+    fontSize: 14,
+    color: '#333'
+  },
+  stateBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+    marginLeft: 8
+  },
+  stateText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: 'bold'
+  },
+  unreadBadge: {
+    backgroundColor: '#007aff',
+    borderRadius: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    marginLeft: 8,
+    minWidth: 20,
+    alignItems: 'center',
+  },
+  unreadText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: 'bold',
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexWrap: 'wrap'
+  },
+  info: {
+    fontSize: 13,
+    color: '#666'
+  },
   separator: {
     color: '#999',
     fontSize: 14,
     marginHorizontal: 4
   },
-
-  inactiveCard: {
-
-    opacity: 0.5
-
-  },
-
-  content: {
-
-    flex: 1
-
-  },
-
-  name: {
-
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 6
-
-  },
-
-  row: {
-
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10
-
-  },
-
-  info: {
-
-    fontSize: 13,
-    color: '#666'
-
-  },
-
   signalWrapper: {
-
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6
-
   },
-
   circleRow: {
-
     flexDirection: 'row',
     gap: 4
-
   },
-
   signalCircle: {
-
     width: 8,
     height: 8,
     borderRadius: 4
-
   },
-
   center: {
-
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center'
-
   },
-
   loadingText: {
-
     marginTop: 10,
     color: '#666'
-
   },
-
   errorText: {
-
     marginTop: 10,
     fontSize: 16
-
   }
+})
 
-});
-
-export default MainChatScreen;
+export default MainChatScreen
