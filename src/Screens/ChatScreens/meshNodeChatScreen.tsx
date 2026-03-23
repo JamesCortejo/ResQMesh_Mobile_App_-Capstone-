@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -19,7 +19,15 @@ import { RouteProp, useRoute, useFocusEffect } from '@react-navigation/native';
 import { RootStackParamList } from '../../navigations/appNavigations';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
-
+import {
+  startRecording,
+  stopRecording,
+  audioToBase64,
+  sendVoiceMessage,
+  cancelRecording,
+} from '../../services/voiceService';
+import { Audio } from 'expo-av';
+import { File, Paths } from 'expo-file-system';
 
 const MAX_MESSAGE_LENGTH = 150;
 
@@ -42,6 +50,39 @@ interface Message {
   status: string;
 }
 
+// ---------------------------
+// Waveform Component (deterministic, based on message id)
+// ---------------------------
+const Waveform = ({ isPlaying, seed }: { isPlaying: boolean; seed: number }) => {
+  const bars = useMemo(() => {
+    // deterministic pseudo‑random heights (range 5‑25)
+    const random = (min: number, max: number, idx: number) => {
+      const x = Math.sin(seed + idx) * 10000;
+      return min + (Math.abs(x) % (max - min));
+    };
+    return Array.from({ length: 20 }, (_, i) => random(5, 25, i));
+  }, [seed]);
+
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+      {bars.map((height, i) => (
+        <View
+          key={i}
+          style={{
+            width: 3,
+            height,
+            backgroundColor: isPlaying ? '#4CAF50' : '#888',
+            borderRadius: 2,
+          }}
+        />
+      ))}
+    </View>
+  );
+};
+
+// ---------------------------
+// Main Screen
+// ---------------------------
 const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
   const route = useRoute<MeshNodeChatRouteProp>();
   const { nodeId, nodeName, users } = route.params;
@@ -51,29 +92,101 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [sendingVoice, setSendingVoice] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [nodeOnline, setNodeOnline] = useState(true);
 
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [playingMessageId, setPlayingMessageId] = useState<number | null>(null);
+
+  // State for durations (key: message id, value: duration in milliseconds)
+  const [durations, setDurations] = useState<{ [key: number]: number }>({});
+
   const flatListRef = useRef<FlatList>(null);
+  const playbackSoundRef = useRef<Audio.Sound | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const loadingDurationIds = useRef(new Set<number>()); // prevent concurrent loads
 
   const isBroadcast = nodeId === 'BROADCAST';
 
-  const fetchMessages = useCallback(async (showRefreshing = false) => {
-    if (!nodeId) return;
-    try {
-      setError(null);
-      if (showRefreshing) setRefreshing(true);
-      const response = await api.get(`/api/messages/${nodeId}`);
-      setMessages(response.data);
-    } catch (err: any) {
-      console.error('Failed to fetch messages', err);
-      setError('Could not load messages. Please try again.');
-    } finally {
-      setLoading(false);
-      if (showRefreshing) setRefreshing(false);
+  // ---------- Duration Loading for Voice Messages ----------
+  const loadDuration = useCallback(async (item: Message) => {
+  if (item.type !== 'voice') return;
+  if (durations[item.id]) return;
+  if (loadingDurationIds.current.has(item.id)) return;
+
+  loadingDurationIds.current.add(item.id);
+  try {
+    const file = new File(Paths.cache, `voice_${item.id}.m4a`);
+    await file.write(item.content, { encoding: 'base64' });
+
+    const { sound, status } = await Audio.Sound.createAsync(
+      { uri: file.uri },
+      { shouldPlay: false }
+    );
+
+    if (status.isLoaded && status.durationMillis) {
+      const duration = status.durationMillis;
+      setDurations(prev => ({
+        ...prev,
+        [item.id]: duration,
+      }));
     }
-  }, [nodeId]);
+
+    await sound.unloadAsync();
+  } catch (e) {
+    console.log("Duration load error:", e);
+  } finally {
+    loadingDurationIds.current.delete(item.id);
+  }
+}, [durations]);
+
+  // Trigger duration loading for all voice messages that don't have a duration yet
+  useEffect(() => {
+    const voiceMessages = messages.filter(m => m.type === 'voice');
+    for (const msg of voiceMessages) {
+      loadDuration(msg);
+    }
+  }, [messages, loadDuration]);
+
+  // ---------- Lifecycle Cleanup ----------
+  useEffect(() => {
+    return () => {
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+
+      if (playbackSoundRef.current) {
+        playbackSoundRef.current.unloadAsync().catch(() => {});
+        playbackSoundRef.current = null;
+      }
+
+      cancelRecording().catch(() => {});
+    };
+  }, []);
+
+  // ---------- Fetch Messages ----------
+  const fetchMessages = useCallback(
+    async (showRefreshing = false) => {
+      if (!nodeId) return;
+      try {
+        setError(null);
+        if (showRefreshing) setRefreshing(true);
+        const response = await api.get(`/api/messages/${nodeId}`);
+        setMessages(response.data);
+      } catch (err: any) {
+        console.error('Failed to fetch messages', err);
+        setError('Could not load messages. Please try again.');
+      } finally {
+        setLoading(false);
+        if (showRefreshing) setRefreshing(false);
+      }
+    },
+    [nodeId]
+  );
 
   useEffect(() => {
     fetchMessages();
@@ -104,18 +217,132 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
     }
   }, [messages]);
 
-  // Simulate node online status – replace with real check (skip for broadcast)
   useEffect(() => {
     if (isBroadcast) return;
+
     const interval = setInterval(() => {
       setNodeOnline(Math.random() > 0.2);
     }, 5000);
+
     return () => clearInterval(interval);
   }, [isBroadcast]);
 
+  // ---------- Audio Playback ----------
+  const stopCurrentPlayback = useCallback(async () => {
+    if (playbackSoundRef.current) {
+      try {
+        await playbackSoundRef.current.unloadAsync();
+      } catch (e) {
+        console.warn('Playback cleanup failed', e);
+      }
+      playbackSoundRef.current = null;
+    }
+    setPlayingMessageId(null);
+  }, []);
+
+  const playVoiceMessage = async (item: Message) => {
+    try {
+      if (playingMessageId === item.id) {
+        await stopCurrentPlayback();
+        return;
+      }
+
+      await stopCurrentPlayback();
+
+      if (!item.content) return;
+
+      // Create file and write base64
+      const file = new File(Paths.cache, `voice_${item.id}.m4a`);
+      await file.write(item.content, { encoding: 'base64' });
+
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: file.uri },
+        { shouldPlay: true }
+      );
+
+      playbackSoundRef.current = sound;
+      setPlayingMessageId(item.id);
+
+      sound.setOnPlaybackStatusUpdate((status: any) => {
+        if (!status.isLoaded) return;
+        if (status.didJustFinish) {
+          stopCurrentPlayback().catch(() => {});
+        }
+      });
+
+    } catch (error) {
+      console.error('Voice playback failed:', error);
+      Alert.alert('Playback error', 'Could not play this voice clip.');
+    }
+  };
+
+  // ---------- Voice Recording ----------
+  const startVoiceRecording = useCallback(async () => {
+    if (isRecording || sending || sendingVoice) return;
+
+    try {
+      await stopCurrentPlayback();
+
+      await startRecording();
+      setIsRecording(true);
+      setRecordingSeconds(0);
+
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } catch (error) {
+      console.error('Start recording failed:', error);
+      Alert.alert('Recording error', 'Could not start voice recording.');
+      setIsRecording(false);
+    }
+  }, [isRecording, sending, sendingVoice, stopCurrentPlayback]);
+
+  const finishVoiceRecording = useCallback(async () => {
+    if (!isRecording) return;
+
+    try {
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+        recordingTimerRef.current = null;
+      }
+
+      setIsRecording(false);
+      setSendingVoice(true);
+
+      const uri = await stopRecording();
+      const base64 = await audioToBase64(uri);
+
+      await sendVoiceMessage(nodeId, base64);
+      await fetchMessages();
+    } catch (error: any) {
+      console.error('Stop/send recording failed:', error);
+      Alert.alert(
+        'Voice message failed',
+        error.response?.data?.error || 'Could not send the voice message.'
+      );
+      try {
+        await cancelRecording();
+      } catch {
+        // ignore cleanup errors
+      }
+    } finally {
+      setSendingVoice(false);
+      setRecordingSeconds(0);
+    }
+  }, [fetchMessages, isRecording, nodeId]);
+
+  const handleMicPressIn = useCallback(() => {
+    startVoiceRecording();
+  }, [startVoiceRecording]);
+
+  const handleMicPressOut = useCallback(() => {
+    finishVoiceRecording();
+  }, [finishVoiceRecording]);
+
+  // ---------- Text Messaging ----------
   const handleSend = async () => {
     const trimmed = inputText.trim();
-    if (!trimmed || trimmed.length > MAX_MESSAGE_LENGTH || sending) return;
+    if (!trimmed || trimmed.length > MAX_MESSAGE_LENGTH || sending || isRecording || sendingVoice) return;
 
     setSending(true);
     const tempId = Date.now();
@@ -130,7 +357,7 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
       timestamp: new Date().toISOString(),
       status: 'queued',
     };
-    setMessages(prev => [...prev, optimisticMessage]);
+    setMessages((prev) => [...prev, optimisticMessage]);
     setInputText('');
 
     try {
@@ -144,7 +371,7 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
       console.error('Failed to send message', err);
       const errorMsg = err.response?.data?.error || 'Could not send message. Please try again.';
       Alert.alert('Error', errorMsg);
-      setMessages(prev => prev.filter(msg => msg.id !== tempId));
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
     } finally {
       setSending(false);
     }
@@ -170,7 +397,6 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
               });
               setInputText('');
               Alert.alert('Broadcast Sent', 'Your message has been broadcast.');
-              // If we are in broadcast channel, refresh to show own message
               if (isBroadcast) {
                 await fetchMessages();
               }
@@ -187,6 +413,7 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
     );
   }, [inputText, sending, isBroadcast, fetchMessages]);
 
+  // ---------- Helpers ----------
   const formatTime = (timestamp: string) => {
     try {
       const date = new Date(timestamp);
@@ -194,6 +421,19 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
     } catch {
       return '';
     }
+  };
+
+  const formatDurationMs = (millis: number) => {
+    const seconds = Math.floor(millis / 1000);
+    const min = Math.floor(seconds / 60);
+    const sec = seconds % 60;
+    return `${min}:${sec < 10 ? '0' : ''}${sec}`;
+  };
+
+  const formatDurationSec = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
   };
 
   const renderStatus = (status: string) => {
@@ -214,8 +454,10 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
     }
   };
 
+  // ---------- Message Rendering ----------
   const renderMessage = ({ item }: { item: Message }) => {
     const isMe = item.senderCode === user?.code;
+
     return (
       <View
         style={[
@@ -224,15 +466,35 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
         ]}
       >
         {!isMe && <Text style={styles.senderName}>{item.senderName}</Text>}
+
         <View
           style={[
             styles.messageBubble,
             isMe ? styles.myMessage : styles.otherMessage,
           ]}
         >
-          <Text style={[styles.messageText, isMe && styles.myMessageText]}>
-            {item.content}
-          </Text>
+          {item.type === 'voice' ? (
+            <TouchableOpacity
+              style={styles.voiceRow}
+              onPress={() => playVoiceMessage(item)}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name={playingMessageId === item.id ? 'stop-circle-outline' : 'play-circle-outline'}
+                size={24}
+                color={isMe ? '#fff' : '#007aff'}
+              />
+              <Waveform isPlaying={playingMessageId === item.id} seed={item.id} />
+              <Text style={[styles.voiceDuration, isMe && styles.myMessageText]}>
+                {durations[item.id] ? formatDurationMs(durations[item.id]) : '...'}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <Text style={[styles.messageText, isMe && styles.myMessageText]}>
+              {item.content}
+            </Text>
+          )}
+
           <View style={styles.messageFooter}>
             <Text style={[styles.timestamp, isMe && styles.myTimestamp]}>
               {formatTime(item.timestamp)}
@@ -321,7 +583,7 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
               <Text style={styles.emptySubText}>
                 {isBroadcast
                   ? 'Broadcast messages will appear here'
-                  : 'Say hello to start the conversation'}
+                  : 'Hold the mic button to send a voice clip'}
               </Text>
             </View>
           }
@@ -329,22 +591,55 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
 
         {!isBroadcast && (
           <View style={styles.inputContainer}>
-            <View style={styles.inputBar}>
-              <TouchableOpacity style={styles.attachButton}>
-                <Ionicons name="add-circle-outline" size={28} color="#007aff" />
-              </TouchableOpacity>
+            {isRecording && (
+              <View style={styles.recordingBar}>
+                <Ionicons name="radio-outline" size={18} color="#d32f2f" />
+                <Text style={styles.recordingText}>
+                  Recording... {formatDurationSec(recordingSeconds)}
+                </Text>
+              </View>
+            )}
 
-              {/* Broadcast button – shown only in regular chats */}
+            <View style={styles.inputBar}>
+              {/* Broadcast button */}
               <TouchableOpacity
-                style={styles.iconButton}
+                style={[
+                  styles.broadcastButton,
+                  (!inputText.trim() || isOverLimit || isRecording || sendingVoice) && styles.broadcastButtonDisabled,
+                ]}
                 onPress={handleBroadcast}
-                disabled={sending || !inputText.trim() || isOverLimit}
+                disabled={sending || !inputText.trim() || isOverLimit || isRecording || sendingVoice}
               >
                 <Ionicons
                   name="megaphone-outline"
-                  size={22}
-                  color={(!inputText.trim() || isOverLimit) ? '#ccc' : '#007aff'}
+                  size={20}
+                  color={
+                    (!inputText.trim() || isOverLimit || isRecording || sendingVoice)
+                      ? '#b0b0b0'
+                      : '#007aff'
+                  }
                 />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.micButton,
+                  (isRecording || sendingVoice) && styles.micButtonRecording,
+                ]}
+                onPressIn={handleMicPressIn}
+                onPressOut={handleMicPressOut}
+                disabled={sending || sendingVoice}
+                activeOpacity={0.8}
+              >
+                {sendingVoice ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons
+                    name={isRecording ? 'stop' : 'mic'}
+                    size={20}
+                    color="#fff"
+                  />
+                )}
               </TouchableOpacity>
 
               <TextInput
@@ -354,17 +649,19 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
                 value={inputText}
                 onChangeText={setInputText}
                 onSubmitEditing={handleSend}
-                editable={!sending}
+                editable={!sending && !isRecording && !sendingVoice}
                 maxLength={MAX_MESSAGE_LENGTH * 2}
                 multiline
               />
+
               <TouchableOpacity
                 style={[
                   styles.sendButton,
-                  (sending || !inputText.trim() || isOverLimit) && styles.sendButtonDisabled,
+                  (sending || !inputText.trim() || isOverLimit || isRecording || sendingVoice) &&
+                    styles.sendButtonDisabled,
                 ]}
                 onPress={handleSend}
-                disabled={sending || !inputText.trim() || isOverLimit}
+                disabled={sending || !inputText.trim() || isOverLimit || isRecording || sendingVoice}
               >
                 {sending ? (
                   <ActivityIndicator size="small" color="#fff" />
@@ -373,6 +670,7 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
                 )}
               </TouchableOpacity>
             </View>
+
             {inputText.length > 0 && (
               <View style={styles.counterContainer}>
                 <View style={styles.progressBar}>
@@ -510,19 +808,37 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#e5e5ea',
   },
+  recordingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 2,
+  },
+  recordingText: {
+    color: '#d32f2f',
+    fontWeight: '600',
+    fontSize: 13,
+  },
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     paddingHorizontal: 8,
     paddingVertical: 8,
   },
-  attachButton: {
-    paddingHorizontal: 6,
-    paddingBottom: 8,
+  broadcastButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#e5e5ea',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+    marginRight: 6,
   },
-  iconButton: {
-    paddingHorizontal: 6,
-    paddingBottom: 8,
+  broadcastButtonDisabled: {
+    backgroundColor: '#f0f0f0',
   },
   input: {
     flex: 1,
@@ -543,6 +859,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
+    marginLeft: 6,
+  },
+  micButton: {
+    backgroundColor: '#d32f2f',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+    marginRight: 6,
+  },
+  micButtonRecording: {
+    backgroundColor: '#8b0000',
   },
   sendButtonDisabled: {
     backgroundColor: '#b3d4ff',
@@ -612,6 +942,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#c6c6c8',
     marginTop: 4,
+  },
+  voiceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 140,
+  },
+  voiceDuration: {
+    fontSize: 12,
+    color: '#666',
+  },
+  // Keep old styles if needed, but we replaced the voice row
+  voiceTextBlock: {
+    flexDirection: 'column',
+  },
+  voiceTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#000',
+  },
+  voiceSubtitle: {
+    fontSize: 12,
+    color: '#666',
+    marginTop: 2,
   },
 });
 

@@ -57,6 +57,7 @@ const RescuerMapScreen = () => {
   const [meshConnected, setMeshConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [fetchingDistress, setFetchingDistress] = useState(false);
+  const [connectedNodeId, setConnectedNodeId] = useState<string | null>(null);
   const slideAnim = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView | null>(null);
   const pulseAnims = useRef<{ [key: string]: Animated.Value }>({}).current;

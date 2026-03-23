@@ -45,7 +45,7 @@ const CivilianLoginScreen: React.FC<Props> = ({ navigation }) => {
     setLoading(true);
     try {
       // Get the node ID from the status endpoint
-      const statusRes = await api.get('/api/status', { timeout: 3000 });
+      const statusRes = await api.get('/api/status', { timeout: 10000 });
       const nodeId = statusRes.data.node_id;
 
       await signIn({ phone, password, nodeId }, 'civilian', remember);

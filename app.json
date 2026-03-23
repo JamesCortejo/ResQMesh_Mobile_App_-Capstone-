@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "ResQMesh",
-    "slug": "ResQMesh",
+    "slug": "resqmesh",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -22,8 +22,12 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "usesCleartextTraffic": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBhjtRjWP3MMglHJCHUMuC16PP2hpPOmZ4"
+        }
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,7 +39,20 @@
     },
     "plugins": [
       "expo-font",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true,
+            "networkSecurityConfig": "@xml/network_security_config"
+          },
+          "ios": {
+            "usesNonExemptEncryption": true
+          }
+        }
+      ],
+      "@maplibre/maplibre-react-native"
     ]
   }
 }

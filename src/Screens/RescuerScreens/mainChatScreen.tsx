@@ -81,7 +81,7 @@ const RescuerMainChatScreen = memo(() => {
             rootNavigation.navigate('MeshNodeChat', {
               nodeId: item.id,
               nodeName: item.name,
-              users: item.users,
+              users: item.users ?? 0,
             })
           }
         >

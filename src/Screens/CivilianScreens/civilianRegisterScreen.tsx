@@ -361,7 +361,7 @@ const styles = StyleSheet.create({
     height: 52,
     marginBottom: 14,
   },
-  picker: { flex: 1, marginLeft: 6 },
+  picker: { flex: 1, marginLeft: 6, color: '#111' },
   registerButton: {
     backgroundColor: '#1e88e5',
     height: 52,
