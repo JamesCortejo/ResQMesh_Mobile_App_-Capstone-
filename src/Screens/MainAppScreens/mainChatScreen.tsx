@@ -18,11 +18,14 @@ import { useRootNavigation } from '../../hooks/useRootNavigation'
 import api from '../../services/api'
 import { NODE_INACTIVE_TIMEOUT_MS } from '../../constants/timeouts'
 
-const MainChatScreen = memo(() => {
+type MeshNodeWithSignal = MeshNode & {
+  signal?: number | string | null
+}
 
+const MainChatScreen = memo(() => {
   const rootNavigation = useRootNavigation()
 
-  const [nodes, setNodes] = useState<MeshNode[]>([])
+  const [nodes, setNodes] = useState<MeshNodeWithSignal[]>([])
   const [connectedNodeId, setConnectedNodeId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -45,9 +48,9 @@ const MainChatScreen = memo(() => {
         })
       ])
     ).start()
-  }, [])
+  }, [glowAnim])
 
-  const isNodeActive = (node: MeshNode) => {
+  const isNodeActive = (node: MeshNodeWithSignal) => {
     if (node.id === connectedNodeId) return true
     if (!node.lastSeen) return false
     const lastSeen = new Date(node.lastSeen).getTime()
@@ -61,11 +64,51 @@ const MainChatScreen = memo(() => {
     return `${(meters / 1000).toFixed(2)} km`
   }
 
-  const getSignalLevel = (rssi?: number | null) => {
-    if (rssi === null || rssi === undefined) return 0
-    if (rssi >= -70) return 4
-    if (rssi >= -85) return 3
-    if (rssi >= -100) return 2
+  const getRawSignal = (node: MeshNodeWithSignal): number | null => {
+    const raw = node.signal
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+    if (typeof raw === 'string') {
+      const parsed = Number(raw)
+      if (!Number.isNaN(parsed) && Number.isFinite(parsed)) return parsed
+    }
+    return null
+  }
+
+  const getSignalLevel = (node: MeshNodeWithSignal) => {
+    if (node.id === connectedNodeId) return 4
+
+    const rawSignal = getRawSignal(node)
+
+    // If backend ever returns a real signal value, use it.
+    if (rawSignal !== null) {
+      if (rawSignal >= -70) return 4
+      if (rawSignal >= -85) return 3
+      if (rawSignal >= -100) return 2
+      return 1
+    }
+
+    // Otherwise compute a stable "signal quality" from freshness + distance.
+    if (!node.lastSeen) return 0
+
+    const ageMs = Date.now() - new Date(node.lastSeen).getTime()
+    if (ageMs > 30000) return 0
+
+    let freshness = 1
+    if (ageMs > 20000) freshness = 0.4
+    else if (ageMs > 10000) freshness = 0.7
+
+    let distanceScore = 1
+    if (node.distanceMeters !== null && node.distanceMeters !== undefined) {
+      if (node.distanceMeters > 2000) distanceScore = 0.2
+      else if (node.distanceMeters > 1000) distanceScore = 0.5
+      else if (node.distanceMeters > 300) distanceScore = 0.8
+    }
+
+    const score = freshness * distanceScore
+
+    if (score > 0.8) return 4
+    if (score > 0.6) return 3
+    if (score > 0.3) return 2
     return 1
   }
 
@@ -79,8 +122,18 @@ const MainChatScreen = memo(() => {
     }
   }
 
-  const renderSignalCircles = (rssi?: number | null, nodeId?: string) => {
-    if (nodeId === connectedNodeId) {
+  const getSignalLabel = (level: number) => {
+    switch (level) {
+      case 4: return 'Excellent'
+      case 3: return 'Good'
+      case 2: return 'Weak'
+      case 1: return 'Poor'
+      default: return 'No Signal'
+    }
+  }
+
+  const renderSignalCircles = (node: MeshNodeWithSignal) => {
+    if (node.id === connectedNodeId) {
       return (
         <View style={styles.signalWrapper}>
           <Ionicons name="radio-outline" size={14} color="#4caf50" />
@@ -91,13 +144,13 @@ const MainChatScreen = memo(() => {
       )
     }
 
-    const level = getSignalLevel(rssi)
+    const level = getSignalLevel(node)
     const color = getSignalColor(level)
 
     return (
       <View style={styles.signalWrapper}>
         <Ionicons name="radio-outline" size={14} color="#666" />
-        <Text style={styles.info}>{rssi ?? 'N/A'}</Text>
+        <Text style={styles.info}>{getSignalLabel(level)}</Text>
         <View style={styles.circleRow}>
           {[0, 1, 2, 3].map((i) => (
             <View
@@ -120,10 +173,11 @@ const MainChatScreen = memo(() => {
       setConnectedNodeId(localNodeId)
 
       const nodesRes = await api.get('/api/nodes')
-      const allNodes: MeshNode[] = nodesRes.data.map((node: any) => ({
+      const allNodes: MeshNodeWithSignal[] = nodesRes.data.map((node: any) => ({
         ...node,
         distress: node.distress === true,
-        distanceMeters: node.distanceMeters ?? null
+        distanceMeters: node.distanceMeters ?? null,
+        signal: node.signal ?? null
       }))
 
       allNodes.sort((a, b) => {
@@ -172,8 +226,7 @@ const MainChatScreen = memo(() => {
     }, [loadNodes, fetchUnreadCounts])
   )
 
-  // Special broadcast node
-  const broadcastNode: MeshNode = {
+  const broadcastNode: MeshNodeWithSignal = {
     id: 'BROADCAST',
     name: 'Broadcast Channel',
     users: 0,
@@ -185,7 +238,7 @@ const MainChatScreen = memo(() => {
 
   const data = [broadcastNode, ...nodes]
 
-  const renderNode = ({ item }: { item: MeshNode }) => {
+  const renderNode = ({ item }: { item: MeshNodeWithSignal }) => {
     if (!item) return null
 
     const isBroadcast = item.id === 'BROADCAST'
@@ -217,19 +270,11 @@ const MainChatScreen = memo(() => {
         return
       }
 
-      if (isBroadcast) {
-        rootNavigation.navigate('MeshNodeChat', {
-          nodeId: 'BROADCAST',
-          nodeName: 'Broadcast Channel',
-          users: 0
-        })
-      } else {
-        rootNavigation.navigate('MeshNodeChat', {
-          nodeId: item.id,
-          nodeName: item.name,
-          users: item.users ?? 0
-        })
-      }
+      rootNavigation.navigate('MeshNodeChat', {
+        nodeId: item.id,
+        nodeName: item.name,
+        users: item.users ?? 0
+      })
     }
 
     const unreadCount = unreadCounts[item.id] || 0
@@ -271,7 +316,7 @@ const MainChatScreen = memo(() => {
                   <Ionicons name="people-outline" size={14} color="#666" />
                   <Text style={styles.info}>{item.users ?? 0}</Text>
                   <Text style={styles.separator}>|</Text>
-                  {renderSignalCircles(item.signal, item.id)}
+                  {renderSignalCircles(item)}
                   <Text style={styles.separator}>|</Text>
                   <Ionicons name="location-outline" size={14} color="#666" />
                   <Text style={styles.info}>

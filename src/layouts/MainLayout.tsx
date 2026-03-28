@@ -21,7 +21,7 @@ const MainLayout = ({ children, activeTab }: Props) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f6f6f6',
+    backgroundColor: '#ffffff',
   },
   content: {
     flex: 1,

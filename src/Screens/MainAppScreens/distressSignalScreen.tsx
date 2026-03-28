@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,14 +12,25 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
 import { useFocusEffect } from '@react-navigation/native';
+
 import MainLayout from '../../layouts/MainLayout';
 import WelcomeCard from '../../components/WelcomeCard';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 
-// Helper
-const getDisplayReason = (reasonCode: string): string => {
-  const map: { [key: string]: string } = {
+type DistressRecord = {
+  id: number | string;
+  reason?: string | null;
+  timestamp?: string | null;
+  user_code?: string | null;
+};
+
+const getDisplayReason = (reasonCode?: string | null): string => {
+  if (!reasonCode || typeof reasonCode !== 'string') {
+    return 'UNKNOWN EMERGENCY';
+  }
+
+  const map: Record<string, string> = {
     road_accident: 'ROAD ACCIDENT',
     flooding: 'FLOODING',
     fire: 'FIRE',
@@ -31,32 +42,65 @@ const getDisplayReason = (reasonCode: string): string => {
   return map[reasonCode] || reasonCode.replace(/_/g, ' ').toUpperCase();
 };
 
-const DistressSignalScreen = () => {
+const normalizeDistress = (data: any): DistressRecord | null => {
+  if (!data || typeof data !== 'object') return null;
 
+  const id = data.id ?? data.distress_id ?? data.distressId;
+  if (id === undefined || id === null) return null;
+
+  return {
+    id,
+    reason: typeof data.reason === 'string' ? data.reason : null,
+    timestamp:
+      typeof data.timestamp === 'string'
+        ? data.timestamp
+        : typeof data.created_at === 'string'
+        ? data.created_at
+        : null,
+    user_code:
+      typeof data.user_code === 'string'
+        ? data.user_code
+        : typeof data.userCode === 'string'
+        ? data.userCode
+        : null,
+  };
+};
+
+const safeDate = (ts?: string | null) => {
+  try {
+    if (!ts) return 'Unknown time';
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return 'Invalid time';
+    return d.toLocaleString();
+  } catch {
+    return 'Invalid time';
+  }
+};
+
+const DistressSignalScreen = () => {
   const { user, nodeId } = useAuth();
 
   const [reason, setReason] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [activeDistress, setActiveDistress] = useState<any>(null);
+  const [activeDistress, setActiveDistress] = useState<DistressRecord | null>(null);
 
-  const fadeAnim = useRef(new Animated.Value(1)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const animationRef = useRef<Animated.CompositeAnimation | null>(null);
 
-  // Flash animation
+  // 🔥 FIXED ANIMATION
   useEffect(() => {
-
-    let animation: Animated.CompositeAnimation;
-
     if (activeDistress) {
+      animationRef.current?.stop();
 
-      animation = Animated.loop(
+      const anim = Animated.loop(
         Animated.sequence([
-          Animated.timing(fadeAnim, {
-            toValue: 0.3,
+          Animated.timing(pulseAnim, {
+            toValue: 0.45,
             duration: 800,
             useNativeDriver: true,
           }),
-          Animated.timing(fadeAnim, {
+          Animated.timing(pulseAnim, {
             toValue: 1,
             duration: 800,
             useNativeDriver: true,
@@ -64,157 +108,137 @@ const DistressSignalScreen = () => {
         ])
       );
 
-      animation.start();
-
+      animationRef.current = anim;
+      anim.start();
     } else {
-      fadeAnim.setValue(1);
+      animationRef.current?.stop();
+      animationRef.current = null;
+      pulseAnim.setValue(1);
     }
 
-    return () => animation?.stop();
-
+    return () => {
+      animationRef.current?.stop();
+    };
   }, [activeDistress]);
 
-  // Fetch node distress
-  const fetchActiveDistress = async () => {
+  // 🔥 FIXED FETCH LOOP
+  const fetchActiveDistress = useCallback(async () => {
+    if (!nodeId) return;
 
     try {
+      const response = await api.get(`/api/distress/node-active?nodeId=${nodeId}`);
+      const payload = response.data?.distress ?? response.data;
+      const normalized = normalizeDistress(payload);
 
-      const response = await api.get(
-        `/api/distress/node-active?nodeId=${nodeId}`
-      );
-
-      const distress = response.data;
-
-      // Everyone on the node sees the distress
-      setActiveDistress(distress);
-
+      setActiveDistress((prev) => {
+        if (!normalized && !prev) return null;
+        if (prev?.id === normalized?.id) return prev;
+        return normalized;
+      });
     } catch (error) {
-
       console.error('Failed to fetch active distress:', error);
-
+      setActiveDistress(null);
     }
+  }, [nodeId]);
 
-  };
-
-  // Refresh when screen focused
   useFocusEffect(
-    React.useCallback(() => {
-      fetchActiveDistress();
-    }, [])
-  );
-
-  // Refresh when app returns foreground
-  useEffect(() => {
-
-    const subscription = AppState.addEventListener('change', (nextState) => {
-
-      if (nextState === 'active') {
+    useCallback(() => {
+      if (!activeDistress) {
         fetchActiveDistress();
       }
+    }, [fetchActiveDistress, activeDistress])
+  );
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && !activeDistress) {
+        fetchActiveDistress();
+      }
     });
 
     return () => subscription.remove();
-
-  }, []);
+  }, [fetchActiveDistress, activeDistress]);
 
   const handleActivate = async () => {
-
-    if (!reason) return;
+    if (!reason || !nodeId || loading) return;
 
     setModalVisible(false);
     setLoading(true);
 
     try {
-
       const response = await api.post('/api/distress', {
         reason,
-        nodeId: nodeId,
+        nodeId,
       });
 
-      setActiveDistress(response.data.distress);
+      const payload = response.data?.distress ?? response.data;
+      const normalized = normalizeDistress(payload);
 
-      Alert.alert('Distress Activated', 'Your distress signal has been sent.');
-
+      if (normalized) {
+        setActiveDistress(normalized);
+        setTimeout(() => {
+          Alert.alert('Distress Activated', 'Your distress signal has been sent.');
+        }, 50);
+      } else {
+        Alert.alert('Error', 'Invalid distress data received.');
+      }
     } catch (error: any) {
-
-      if (error.response?.status === 409) {
-
+      if (error?.response?.status === 409) {
         Alert.alert(
           'Distress Active',
           'Another distress signal is already active on this node.'
         );
-
       } else {
-
         Alert.alert(
           'Error',
-          error.response?.data?.error || 'Failed to activate distress.'
+          error?.response?.data?.error || 'Failed to activate distress.'
         );
-
       }
-
     } finally {
-
       setLoading(false);
-
     }
-
   };
 
   const handleCancel = async () => {
+    if (!activeDistress?.id) return;
 
     Alert.alert(
       'Cancel Distress',
       'Are you sure you want to cancel this distress signal?',
       [
         { text: 'No', style: 'cancel' },
-
         {
           text: 'Yes, Cancel',
           style: 'destructive',
-
           onPress: async () => {
-
             try {
-
               await api.patch(`/api/distress/${activeDistress.id}/cancel`);
-
               setActiveDistress(null);
-
               Alert.alert('Canceled', 'Distress signal canceled.');
-
-            } catch {
-
+            } catch (error) {
+              console.error(error);
               Alert.alert('Error', 'Failed to cancel distress.');
-
             }
-
           },
         },
       ]
     );
-
   };
 
-  // FLASHING SCREEN
   if (activeDistress) {
-
     return (
       <MainLayout activeTab="distress">
-        <Animated.View
-          style={[
-            styles.container,
-            {
-              backgroundColor: fadeAnim.interpolate({
-                inputRange: [0.3, 1],
-                outputRange: ['#ffcccc', '#ff5555'],
-              }),
-            },
-          ]}
-        >
-          <View style={styles.activeCard}>
+        <View style={[styles.container, styles.activeContainer]}>
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFillObject,
+              styles.flashOverlay,
+              { opacity: pulseAnim },
+            ]}
+          />
 
+          <View style={styles.activeCard}>
             <Ionicons name="warning" size={64} color="#8b0000" />
 
             <Text style={styles.activeTitle}>DISTRESS ACTIVE</Text>
@@ -224,80 +248,70 @@ const DistressSignalScreen = () => {
             </Text>
 
             <Text style={styles.activeTime}>
-              Activated:{' '}
-              {new Date(activeDistress.timestamp).toLocaleString()}
+              Activated: {safeDate(activeDistress.timestamp)}
             </Text>
 
-            {/* ONLY OWNER CAN CANCEL */}
-            {activeDistress?.user_code === user?.code && (
-
-              <TouchableOpacity
-                style={styles.cancelActiveButton}
-                onPress={handleCancel}
-              >
-                <Ionicons
-                  name="close-circle-outline"
-                  size={24}
-                  color="#fff"
-                />
-
-                <Text style={styles.cancelActiveText}>
-                  CANCEL DISTRESS
-                </Text>
-
-              </TouchableOpacity>
-
-            )}
+            {activeDistress.user_code &&
+              user?.code &&
+              activeDistress.user_code === user.code && (
+                <TouchableOpacity
+                  style={styles.cancelActiveButton}
+                  onPress={handleCancel}
+                >
+                  <Ionicons name="close-circle-outline" size={24} color="#fff" />
+                  <Text style={styles.cancelActiveText}>CANCEL DISTRESS</Text>
+                </TouchableOpacity>
+              )}
 
             <Text style={styles.note}>
               Rescuers have been notified. Stay calm.
             </Text>
-
           </View>
-        </Animated.View>
+        </View>
       </MainLayout>
     );
-
   }
 
-  // NORMAL SCREEN
   return (
-
     <MainLayout activeTab="distress">
-
       <View style={styles.container}>
-
         <WelcomeCard />
 
         <View style={styles.card}>
-
           <View style={styles.titleRow}>
-
             <Ionicons name="warning-outline" size={22} color="#d32f2f" />
-
-            <Text style={styles.title}>
-              Activate Distress Signal
-            </Text>
-
+            <Text style={styles.title}>Activate Distress Signal</Text>
           </View>
 
           <Text style={styles.description}>
             Broadcast your emergency to nearby mesh nodes.
           </Text>
 
+          <View style={styles.infoBox}>
+            <Ionicons name="information-circle-outline" size={18} color="#1e88e5" />
+            <Text style={styles.infoText}>
+              This will alert nearby devices and responders connected to the mesh network.
+            </Text>
+          </View>
+
+          <View style={styles.warningBox}>
+            <Ionicons name="warning-outline" size={18} color="#8b0000" />
+            <Text style={styles.warningText}>
+              Misuse of this feature may lead to serious consequences.
+            </Text>
+          </View>
+
           <Text style={styles.label}>
             Select Emergency Type <Text style={styles.required}>*</Text>
           </Text>
 
           <View style={styles.dropdownWrapper}>
-
             <Picker
               selectedValue={reason}
               onValueChange={(v) => setReason(v)}
               style={styles.picker}
               enabled={!loading}
             >
-
               <Picker.Item label="Select reason..." value="" />
               <Picker.Item label="Road Accident" value="road_accident" />
               <Picker.Item label="Flooding" value="flooding" />
@@ -305,11 +319,8 @@ const DistressSignalScreen = () => {
               <Picker.Item label="Medical Emergency" value="medical" />
               <Picker.Item label="Trapped / Collapsed Structure" value="trapped" />
               <Picker.Item label="Missing Person" value="missing_person" />
-
             </Picker>
-
           </View>
-
         </View>
 
         <TouchableOpacity
@@ -320,75 +331,58 @@ const DistressSignalScreen = () => {
           disabled={!reason || loading}
           onPress={() => setModalVisible(true)}
         >
-
           <Ionicons name="alert-circle-outline" size={20} color="#fff" />
-
           <Text style={styles.activateText}>
-            {loading ? 'Activating...' : 'Continue to Activate'}
+            {loading ? 'Sending Signal...' : 'Proceed to Activation'}
           </Text>
-
         </TouchableOpacity>
 
+        <Text style={styles.footerNote}>
+          Only use this feature during real emergencies.
+        </Text>
+
         <Modal visible={modalVisible} transparent animationType="fade">
-
           <View style={styles.modalOverlay}>
-
             <View style={styles.modalCard}>
-
-              <Text style={styles.modalTitle}>
-                Confirm Distress
-              </Text>
-
-              <Text style={styles.modalText}>
-                Activate distress signal?
-              </Text>
+              <Text style={styles.modalTitle}>Confirm Distress</Text>
+              <Text style={styles.modalText}>Activate distress signal?</Text>
 
               <View style={styles.modalActions}>
-
                 <TouchableOpacity
                   style={styles.cancelButton}
                   onPress={() => setModalVisible(false)}
                 >
-
-                  <Text style={styles.cancelText}>
-                    Cancel
-                  </Text>
-
+                  <Text style={styles.cancelText}>Cancel</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
                   style={styles.confirmButton}
                   onPress={handleActivate}
                 >
-
-                  <Text style={styles.confirmText}>
-                    Activate
-                  </Text>
-
+                  <Text style={styles.confirmText}>Activate</Text>
                 </TouchableOpacity>
-
               </View>
-
             </View>
-
           </View>
-
         </Modal>
-
       </View>
-
     </MainLayout>
-
   );
-
 };
 
 const styles = StyleSheet.create({
-
   container: {
     flex: 1,
     justifyContent: 'space-between',
     backgroundColor: '#fff',
+  },
+
+  activeContainer: {
+    backgroundColor: '#ffcccc',
+  },
+
+  flashOverlay: {
+    backgroundColor: '#ff5555',
   },
 
   card: {
@@ -402,12 +396,12 @@ const styles = StyleSheet.create({
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
 
   title: {
     fontSize: 18,
     fontWeight: '700',
+    marginLeft: 8,
   },
 
   description: {
@@ -416,8 +410,40 @@ const styles = StyleSheet.create({
     marginVertical: 10,
   },
 
+  infoBox: {
+    flexDirection: 'row',
+    backgroundColor: '#e3f2fd',
+    padding: 10,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+
+  infoText: {
+    marginLeft: 8,
+    fontSize: 13,
+    color: '#0d47a1',
+    flex: 1,
+  },
+
+  warningBox: {
+    flexDirection: 'row',
+    backgroundColor: '#fdecea',
+    padding: 10,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+
+  warningText: {
+    marginLeft: 8,
+    fontSize: 13,
+    color: '#8b0000',
+    flex: 1,
+    fontWeight: '500',
+  },
+
   label: {
     fontWeight: '600',
+    marginTop: 10,
   },
 
   required: {
@@ -443,7 +469,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 8,
   },
 
   disabledButton: {
@@ -453,6 +478,14 @@ const styles = StyleSheet.create({
   activateText: {
     color: '#fff',
     fontWeight: '600',
+    marginLeft: 8,
+  },
+
+  footerNote: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#888',
+    marginBottom: 10,
   },
 
   activeCard: {
@@ -465,6 +498,7 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: 'bold',
     color: '#8b0000',
+    marginTop: 12,
   },
 
   activeReason: {
@@ -482,16 +516,14 @@ const styles = StyleSheet.create({
   cancelActiveButton: {
     flexDirection: 'row',
     backgroundColor: '#8b0000',
-    paddingVertical: 14,
-    paddingHorizontal: 30,
+    padding: 14,
     borderRadius: 30,
     alignItems: 'center',
-    gap: 8,
   },
 
   cancelActiveText: {
     color: '#fff',
-    fontWeight: 'bold',
+    marginLeft: 8,
   },
 
   note: {
@@ -527,13 +559,13 @@ const styles = StyleSheet.create({
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 12,
   },
 
   cancelButton: {
     padding: 10,
     backgroundColor: '#eee',
     borderRadius: 8,
+    marginRight: 12,
   },
 
   confirmButton: {
@@ -549,7 +581,6 @@ const styles = StyleSheet.create({
   cancelText: {
     fontWeight: '600',
   },
-
 });
 
 export default DistressSignalScreen;

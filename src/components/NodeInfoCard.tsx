@@ -1,37 +1,13 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-
-interface MeshNode {
-  id: string;
-  nodeNumber: string;
-  name: string;
-  latitude: number;
-  longitude: number;
-  status: string;
-  users: number;
-  signal: string;
-  distress: boolean;
-  lastSeen?: string;
-}
-
-interface DistressDetail {
-  id: number;
-  code: string;
-  reason: string;
-  lat: number;
-  lng: number;
-  timestamp: string;
-  status: string;
-  priority: string;
-  user: {
-    firstName: string;
-    lastName: string;
-    phone: string;
-    bloodType: string;
-    age: number;
-  };
-}
+import type { MeshNode, DistressDetail } from '../types/MeshNode';
 
 interface NodeInfoCardProps {
   node: MeshNode;
@@ -46,10 +22,8 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
   active,
   onClose,
 }) => {
-  // Determine if node is considered online based on active prop
   const isActive = active !== undefined ? active : node.status === 'active';
 
-  // Choose colours based on state
   let borderColor = '#e0e0e0';
   let iconColor = '#1e88e5';
   let titleColor = '#111';
@@ -62,23 +36,23 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
     borderColor = '#d32f2f';
     iconColor = '#d32f2f';
     titleColor = '#d32f2f';
-  } else {
-    borderColor = '#1e88e5';
-    iconColor = '#1e88e5';
-    titleColor = '#1e88e5';
   }
 
-  const formatDate = (dateString: string) => {
-    try {
-      const date = new Date(dateString);
-      return date.toLocaleString();
-    } catch {
-      return 'Invalid date';
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return 'Unknown';
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return 'Invalid date';
+    return date.toLocaleString();
+  };
+
+  const formatCoordinate = (value?: number | null) => {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) {
+      return '?';
     }
+    return Number(value).toFixed(5);
   };
 
   const renderContent = () => {
-    // ----- INACTIVE NODE -----
     if (!isActive) {
       return (
         <>
@@ -86,14 +60,14 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
             <Ionicons name="power-outline" size={16} color="#9e9e9e" />
             <Text style={[styles.infoText, { color: '#666' }]}>Node Offline</Text>
           </View>
+
           <View style={styles.row}>
             <Ionicons name="time-outline" size={16} color="#9e9e9e" />
             <Text style={[styles.infoText, { color: '#666' }]}>
-              Last seen: {node.lastSeen ? formatDate(node.lastSeen) : 'Unknown'}
+              Last seen: {formatDate(node.lastSeen)}
             </Text>
           </View>
 
-          {/* If there is distress information, show it but mark as stale */}
           {distressDetails && (
             <>
               <View style={[styles.row, styles.distressHeader, { marginTop: 12 }]}>
@@ -102,20 +76,29 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
                   DISTRESS (stale)
                 </Text>
               </View>
+
               <View style={styles.row}>
                 <Ionicons name="person-outline" size={16} color="#9e9e9e" />
                 <Text style={styles.staleText}>
-                  Victim: {distressDetails.user?.firstName || '?'} {distressDetails.user?.lastName || ''}
+                  Victim: {distressDetails.user?.firstName ?? '?'}{' '}
+                  {distressDetails.user?.lastName ?? ''}
                 </Text>
               </View>
+
               <View style={styles.row}>
                 <Ionicons name="call-outline" size={16} color="#9e9e9e" />
-                <Text style={styles.staleText}>Phone: {distressDetails.user?.phone || 'N/A'}</Text>
+                <Text style={styles.staleText}>
+                  Phone: {distressDetails.user?.phone ?? 'N/A'}
+                </Text>
               </View>
+
               <View style={styles.row}>
                 <Ionicons name="alert-circle-outline" size={16} color="#9e9e9e" />
-                <Text style={styles.staleText}>Emergency: {distressDetails.reason || 'Unknown'}</Text>
+                <Text style={styles.staleText}>
+                  Emergency: {distressDetails.reason ?? 'Unknown'}
+                </Text>
               </View>
+
               <View style={styles.row}>
                 <Ionicons name="time-outline" size={16} color="#9e9e9e" />
                 <Text style={styles.staleText}>
@@ -128,48 +111,62 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
       );
     }
 
-    // ----- ACTIVE NODE -----
     if (node.distress) {
-      // Distressed state – show loading if details not yet available
       if (!distressDetails) {
         return (
           <View style={styles.row}>
             <Ionicons name="alert-circle-outline" size={16} color="#d32f2f" />
-            <Text style={[styles.infoText, { color: '#d32f2f' }]}>Loading distress details...</Text>
+            <Text style={[styles.infoText, { color: '#d32f2f' }]}>
+              Loading distress details...
+            </Text>
           </View>
         );
       }
-      // Safely render distress details
+
       return (
         <>
           <View style={[styles.row, styles.distressHeader]}>
             <Ionicons name="warning" size={20} color="#d32f2f" />
             <Text style={styles.distressTitle}>ACTIVE DISTRESS</Text>
           </View>
+
           <View style={styles.row}>
             <Ionicons name="person-outline" size={16} color="#d32f2f" />
             <Text style={styles.distressText}>
-              Victim: {distressDetails.user?.firstName || '?'} {distressDetails.user?.lastName || ''}
+              Victim: {distressDetails.user?.firstName ?? '?'}{' '}
+              {distressDetails.user?.lastName ?? ''}
             </Text>
           </View>
+
           <View style={styles.row}>
             <Ionicons name="call-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>Phone: {distressDetails.user?.phone || 'N/A'}</Text>
+            <Text style={styles.distressText}>
+              Phone: {distressDetails.user?.phone ?? 'N/A'}
+            </Text>
           </View>
+
           <View style={styles.row}>
             <Ionicons name="water-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>Blood Type: {distressDetails.user?.bloodType || 'Unknown'}</Text>
+            <Text style={styles.distressText}>
+              Blood Type: {distressDetails.user?.bloodType ?? 'Unknown'}
+            </Text>
           </View>
+
           <View style={styles.row}>
             <Ionicons name="alert-circle-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>Emergency: {distressDetails.reason || 'Unknown'}</Text>
+            <Text style={styles.distressText}>
+              Emergency: {distressDetails.reason ?? 'Unknown'}
+            </Text>
           </View>
+
           <View style={styles.row}>
             <Ionicons name="location-outline" size={16} color="#d32f2f" />
             <Text style={styles.distressText}>
-              Coordinates: {distressDetails.lat?.toFixed(5) ?? '?'}, {distressDetails.lng?.toFixed(5) ?? '?'}
+              Coordinates: {formatCoordinate(distressDetails.lat)},{' '}
+              {formatCoordinate(distressDetails.lng)}
             </Text>
           </View>
+
           <View style={styles.row}>
             <Ionicons name="time-outline" size={16} color="#d32f2f" />
             <Text style={styles.distressText}>
@@ -180,29 +177,34 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
       );
     }
 
-    // Active normal state
     return (
       <>
         <View style={styles.row}>
-          <Ionicons name="people-outline" size={16} color="#1e88e5" />
-          <Text style={styles.infoText}>Users connected: {node.users}</Text>
+          <Ionicons name="people-outline" size={16} color={iconColor} />
+          <Text style={styles.infoText}>Users connected: {node.users ?? 0}</Text>
         </View>
+
         <View style={styles.row}>
-          <Ionicons name="wifi-outline" size={16} color="#1e88e5" />
-          <Text style={styles.infoText}>Signal strength: {node.signal}</Text>
-        </View>
-        <View style={styles.row}>
-          <Ionicons name="location-outline" size={16} color="#1e88e5" />
+          <Ionicons name="wifi-outline" size={16} color={iconColor} />
           <Text style={styles.infoText}>
-            Coordinates: {node.latitude?.toFixed(5) ?? '?'}, {node.longitude?.toFixed(5) ?? '?'}
+            Signal strength: {node.signal ?? 'N/A'}
           </Text>
         </View>
-        {node.lastSeen && (
-          <View style={styles.row}>
-            <Ionicons name="time-outline" size={16} color="#1e88e5" />
-            <Text style={styles.infoText}>Last seen: {formatDate(node.lastSeen)}</Text>
-          </View>
-        )}
+
+        <View style={styles.row}>
+          <Ionicons name="location-outline" size={16} color={iconColor} />
+          <Text style={styles.infoText}>
+            Coordinates: {formatCoordinate(node.latitude ?? node.lat)},{' '}
+            {formatCoordinate(node.longitude ?? node.lng)}
+          </Text>
+        </View>
+
+        <View style={styles.row}>
+          <Ionicons name="time-outline" size={16} color={iconColor} />
+          <Text style={styles.infoText}>
+            Last seen: {formatDate(node.lastSeen)}
+          </Text>
+        </View>
       </>
     );
   };
@@ -211,7 +213,9 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
     <View style={[styles.card, { borderColor }]}>
       <ScrollView showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Text style={[styles.nodeNumber, { color: titleColor }]}>Node {node.nodeNumber}</Text>
+          <Text style={[styles.nodeNumber, { color: titleColor }]}>
+            Node {node.nodeNumber ?? node.id}
+          </Text>
           <Text style={styles.nodeName}>{node.name}</Text>
         </View>
 
@@ -229,9 +233,9 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#fff',
+    backgroundColor: '#ffffff',
     padding: 16,
-    borderRadius: 16,
+    borderRadius: 20,
     elevation: 8,
     borderWidth: 2,
     maxHeight: 400,

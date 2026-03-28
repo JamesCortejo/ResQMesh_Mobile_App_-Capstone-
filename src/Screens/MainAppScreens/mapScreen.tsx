@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,157 +7,150 @@ import {
   Animated,
   ActivityIndicator,
 } from 'react-native';
-import MapView, { Marker, Polyline, UrlTile } from 'react-native-maps';
+import {
+  MapView,
+  Camera,
+  RasterSource,
+  RasterLayer,
+  ShapeSource,
+  LineLayer,
+  CircleLayer,
+  SymbolLayer,
+} from '@maplibre/maplibre-react-native';
 import { Ionicons } from '@expo/vector-icons';
+
 import MainLayout from '../../layouts/MainLayout';
 import WelcomeCard from '../../components/WelcomeCard';
 import NodeInfoCard from '../../components/NodeInfoCard';
 import api from '../../services/api';
 import { NODE_INACTIVE_TIMEOUT_MS } from '../../constants/timeouts';
 
-
 const { width, height } = Dimensions.get('window');
 
-interface MeshNode {
-  id: string;
-  nodeNumber: string;
-  name: string;
-  latitude: number;
-  longitude: number;
-  status: string;
-  users: number;
-  signal: string;
-  distress: boolean;
-  lastSeen?: string;
-}
+type LngLat = [number, number];
 
-interface DistressDetail {
-  id: number;
-  code: string;
-  reason: string;
-  lat: number;
-  lng: number;
-  timestamp: string;
-  status: string;
-  priority: string;
-  user: {
-    firstName: string;
-    lastName: string;
-    phone: string;
-    bloodType: string;
-    occupation: string;
-    age: number;
-    address: string;
-  };
-}
+const MAP_STYLE = {
+  version: 8,
+  glyphs: 'http://192.168.4.1:5000/fonts/{fontstack}/{range}.pbf',
+  sources: {},
+  layers: [],
+};
 
 const MapScreen = () => {
-  const [selectedNode, setSelectedNode] = useState<MeshNode | null>(null);
-  const [selectedNodeDistress, setSelectedNodeDistress] =
-    useState<DistressDetail | null>(null);
-  const [nodes, setNodes] = useState<MeshNode[]>([]);
+  const [selectedNode, setSelectedNode] = useState<any>(null);
+  const [selectedNodeDistress, setSelectedNodeDistress] = useState<any>(null);
+  const [nodes, setNodes] = useState<any[]>([]);
   const [meshConnected, setMeshConnected] = useState(false);
   const [loading, setLoading] = useState(true);
   const [connectedNodeId, setConnectedNodeId] = useState<string | null>(null);
 
+  const [pulse, setPulse] = useState(1); // 🔥 animation state
   const slideAnim = useRef(new Animated.Value(0)).current;
-  const mapRef = useRef<MapView | null>(null);
-  const pulseAnims = useRef<{ [key: string]: Animated.Value }>({}).current;
-  
 
-  const initialRegion = {
-    latitude: 7.9203,
-    longitude: 125.0911,
-    latitudeDelta: 0.03,
-    longitudeDelta: 0.03,
+  const initialCamera = {
+    centerCoordinate: [125.0911, 7.9203] as LngLat,
+    zoomLevel: 13,
   };
 
-   const isNodeActive = (node: MeshNode) => {
-    // If this is the node we are directly connected to, it's definitely active
+  // 🔴 Pulse animation loop
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPulse((p) => (p === 1 ? 1.5 : 1));
+    }, 800);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ---------- Legend ----------
+  const Legend = () => (
+    <View style={styles.legendContainer}>
+      <Text style={styles.legendTitle}>Legend</Text>
+
+      <View style={styles.legendRow}>
+        <View style={[styles.legendDot, { backgroundColor: '#1e88e5' }]} />
+        <Text style={styles.legendText}>Active</Text>
+      </View>
+
+      <View style={styles.legendRow}>
+        <View style={[styles.legendDot, { backgroundColor: '#9e9e9e' }]} />
+        <Text style={styles.legendText}>Inactive</Text>
+      </View>
+
+      <View style={styles.legendRow}>
+        <View style={[styles.legendDot, { backgroundColor: '#b71c1c' }]} />
+        <Text style={styles.legendText}>Distress</Text>
+      </View>
+    </View>
+  );
+
+  // ---------- Utils ----------
+  const normalizeCoords = (node: any): LngLat | null => {
+    const lat = Number(node.latitude ?? node.lat);
+    const lng = Number(node.longitude ?? node.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return [lng, lat];
+  };
+
+  const formatNodeLabel = (id: string) => {
+    const match = id.match(/^([A-Za-z]+)0*(\d+)$/);
+    if (match) return `${match[1]}${match[2]}`;
+    return id;
+  };
+
+  const isNodeActive = (node: any) => {
     if (node.id === connectedNodeId) return true;
-
     if (!node.lastSeen) return false;
-    const lastSeenTime = new Date(node.lastSeen).getTime();
-    return Date.now() - lastSeenTime < NODE_INACTIVE_TIMEOUT_MS;
+    return Date.now() - new Date(node.lastSeen).getTime() < NODE_INACTIVE_TIMEOUT_MS;
   };
 
-    useEffect(() => {
-    let isMounted = true;
+  const getNodeStatus = (node: any) => {
+    if (node.distress) return 'distress';
+    if (isNodeActive(node)) return 'active';
+    return 'inactive';
+  };
 
+  // ---------- Fetch ----------
+  const fetchNodes = async () => {
+    try {
+      const res = await api.get('/api/nodes');
+      setNodes(res.data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const fetchDistressDetails = async (nodeId: string) => {
+    try {
+      const res = await api.get(`/api/node/${nodeId}/distress`);
+      setSelectedNodeDistress(res.data);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
     const checkConnection = async () => {
       try {
-        const statusRes = await api.get('/api/status', { timeout: 3000 });
-        if (isMounted) {
-          setConnectedNodeId(statusRes.data.node_id); // 👈 STORE THE NODE ID
-          setMeshConnected(true);
-          fetchNodes();
-        }
+        const status = await api.get('/api/status');
+        setConnectedNodeId(status.data.node_id);
+        setMeshConnected(true);
+        fetchNodes();
       } catch {
-        if (isMounted) {
-          setMeshConnected(false);
-          setNodes([]);
-        }
+        setMeshConnected(false);
+        setNodes([]);
       } finally {
-        if (isMounted) setLoading(false);
+        setLoading(false);
       }
     };
 
     checkConnection();
-
-    const interval = setInterval(() => {
-      if (meshConnected) fetchNodes();
-    }, 10000);
-
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [meshConnected]);
-
-  const fetchNodes = async () => {
-    try {
-      const res = await api.get('/api/nodes');
-      const nodeList: MeshNode[] = res.data;
-
-      setNodes(nodeList);
-
-      nodeList.forEach((node) => {
-        if (node.distress && !pulseAnims[node.id]) {
-          pulseAnims[node.id] = new Animated.Value(1);
-          startPulse(node.id);
-        }
-      });
-    } catch (error) {
-      console.error('Failed to fetch nodes', error);
-    }
-  };
-
-  const startPulse = (nodeId: string) => {
-    const anim = pulseAnims[nodeId];
-    if (!anim) return;
-
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(anim, {
-          toValue: 1.3,
-          duration: 800,
-          useNativeDriver: true,
-        }),
-        Animated.timing(anim, {
-          toValue: 1,
-          duration: 800,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
-  };
+    const interval = setInterval(fetchNodes, 10000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     Animated.spring(slideAnim, {
       toValue: selectedNode ? 1 : 0,
       useNativeDriver: true,
-      tension: 50,
-      friction: 7,
     }).start();
 
     if (selectedNode?.distress) {
@@ -167,30 +160,56 @@ const MapScreen = () => {
     }
   }, [selectedNode]);
 
-  const fetchDistressDetails = async (nodeId: string) => {
-    try {
-      const res = await api.get(`/api/node/${nodeId}/distress`);
-      setSelectedNodeDistress(res.data);
-    } catch (error) {
-      console.error('Failed to fetch distress details', error);
-    }
-  };
+  // ---------- Data ----------
+  const validNodes = useMemo(() => {
+    return nodes
+      .map((node) => {
+        const coord = normalizeCoords(node);
+        return coord ? { node, coord } : null;
+      })
+      .filter((n): any => n !== null);
+  }, [nodes]);
 
-  const meshLines = useMemo(
-    () =>
-      nodes.map((node) => ({
-        latitude: node.latitude,
-        longitude: node.longitude,
-      })),
-    [nodes]
-  );
+  const lineGeoJSON = useMemo(() => {
+    if (validNodes.length < 2) return null;
+
+    return {
+      type: 'FeatureCollection' as const,
+      features: [
+        {
+          type: 'Feature' as const,
+          properties: {},
+          geometry: {
+            type: 'LineString' as const,
+            coordinates: validNodes.map((n: any) => n.coord),
+          },
+        },
+      ],
+    };
+  }, [validNodes]);
+
+  const nodeGeoJSON = useMemo(() => ({
+    type: 'FeatureCollection' as const,
+    features: validNodes.map(({ node, coord }: any) => ({
+      type: 'Feature' as const,
+      properties: {
+        id: node.id,
+        label: formatNodeLabel(node.id),
+        status: getNodeStatus(node),
+      },
+      geometry: {
+        type: 'Point' as const,
+        coordinates: coord,
+      },
+    })),
+  }), [validNodes]);
 
   if (loading) {
     return (
       <MainLayout activeTab="map">
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#1e88e5" />
-          <Text style={styles.loadingText}>Connecting to mesh...</Text>
+          <Text>Connecting...</Text>
         </View>
       </MainLayout>
     );
@@ -203,92 +222,119 @@ const MapScreen = () => {
 
         <View style={styles.mapWrapper}>
           {meshConnected ? (
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              initialRegion={initialRegion}
-              showsUserLocation
-              showsCompass={false}
-              toolbarEnabled={false}
-            >
-              {/* Tile Server */}
-              <UrlTile
-                urlTemplate="http://192.168.4.1:5000/api/map/tiles/{z}/{x}/{y}.png"
-                maximumZ={19}
-                flipY={false}
-              />
+            <>
+              <MapView
+                style={styles.map}
+                mapStyle={MAP_STYLE}
+                attributionEnabled={false}
+                logoEnabled={false}
+                compassEnabled={false}
+              >
+                <Camera defaultSettings={initialCamera} maxZoomLevel={19} />
 
-              {/* Mesh Network Lines */}
-              <Polyline
-                coordinates={meshLines}
-                strokeColor="#1e88e5"
-                strokeWidth={3}
-                lineDashPattern={[6, 4]}
-              />
+                {/* Tiles */}
+                <RasterSource
+                  id="tiles"
+                  tileUrlTemplates={[
+                    'http://192.168.4.1:5000/api/map/tiles/{z}/{x}/{y}.png',
+                  ]}
+                  tileSize={256}
+                  maxZoomLevel={19}
+                >
+                  <RasterLayer id="tiles-layer" />
+                </RasterSource>
 
-              {/* Node Markers */}
-              {nodes.map((node) => {
-                const extractedNumber = parseInt(
-                  node.id.replace(/\D/g, ''),
-                  10
-                );
+                {/* Lines */}
+                {lineGeoJSON && (
+                  <ShapeSource id="lines" shape={lineGeoJSON}>
+                    <LineLayer
+                      id="lines-layer"
+                      style={{
+                        lineColor: '#1e88e5',
+                        lineWidth: 3,
+                      }}
+                    />
+                  </ShapeSource>
+                )}
 
-                const isDistressed = node.distress;
-                const active = isNodeActive(node);
-                const pulseAnim = pulseAnims[node.id];
-
-                let markerColor = '#1e88e5';
-
-                if (!active) markerColor = '#9e9e9e';
-                if (isDistressed) markerColor = '#b71c1c';
-
-                return (
-                  <Marker
-                    key={node.id}
-                    coordinate={{
-                      latitude: node.latitude,
-                      longitude: node.longitude,
+                {/* Nodes */}
+                <ShapeSource
+                  id="nodes"
+                  shape={nodeGeoJSON}
+                  onPress={(e) => {
+                    const id = e.features?.[0]?.properties?.id;
+                    const found = nodes.find((n) => n.id === id);
+                    if (found) setSelectedNode(found);
+                  }}
+                >
+                  {/* 🔴 Glow */}
+                  <CircleLayer
+                    id="nodes-pulse"
+                    aboveLayerID="lines-layer"
+                    style={{
+                      circleRadius: [
+                        'case',
+                        ['==', ['get', 'status'], 'distress'],
+                        20 * pulse,
+                        0,
+                      ],
+                      circleColor: '#ff0000',
+                      circleOpacity: 0.25,
                     }}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                    onPress={() => setSelectedNode(node)}
-                  >
-                    <View>
-                      {isDistressed && pulseAnim && (
-                        <Animated.View
-                          style={[
-                            styles.glowBackground,
-                            {
-                              transform: [{ scale: pulseAnim }],
-                              opacity: pulseAnim.interpolate({
-                                inputRange: [1, 1.3],
-                                outputRange: [0.8, 0],
-                              }),
-                            },
-                          ]}
-                        />
-                      )}
+                  />
 
-                      <View
-                        style={[
-                          styles.markerCircle,
-                          { backgroundColor: markerColor },
-                        ]}
-                      >
-                        <Text style={styles.markerText}>
-                          {extractedNumber}
-                        </Text>
-                      </View>
-                    </View>
-                  </Marker>
-                );
-              })}
-            </MapView>
+                  {/* Hitbox */}
+                  <CircleLayer
+                    id="nodes-hit"
+                    aboveLayerID="lines-layer"
+                    style={{
+                      circleRadius: 26,
+                      circleOpacity: 0,
+                    }}
+                  />
+
+                  {/* Main circle */}
+                  <CircleLayer
+                    id="nodes-circle"
+                    aboveLayerID="lines-layer"
+                    style={{
+                      circleRadius: 18,
+                      circleColor: [
+                        'match',
+                        ['get', 'status'],
+                        'distress', '#b71c1c',
+                        'active', '#1e88e5',
+                        'inactive', '#9e9e9e',
+                        '#1e88e5',
+                      ],
+                      circleStrokeWidth: 2,
+                      circleStrokeColor: '#ffffff',
+                    }}
+                  />
+
+                  {/* Labels */}
+                  <SymbolLayer
+                    id="nodes-label"
+                    aboveLayerID="nodes-circle"
+                    style={{
+                      textField: ['get', 'label'],
+                      textSize: 10,
+                      textColor: '#ffffff',
+                      textFont: ['Open Sans Regular'],
+                      textAnchor: 'center',
+                      textAllowOverlap: true,
+                      textIgnorePlacement: true,
+                    }}
+                  />
+                </ShapeSource>
+              </MapView>
+
+              <Legend />
+            </>
           ) : (
             <View style={styles.noConnection}>
               <Ionicons name="wifi-outline" size={48} color="#aaa" />
-              <Text style={styles.noConnectionText}>
-                Not connected to mesh.
-              </Text>
+              <Text>Not connected</Text>
             </View>
           )}
         </View>
@@ -327,42 +373,47 @@ const styles = StyleSheet.create({
 
   mapWrapper: {
     width: width - 32,
-    height: height * 0.69,
-    marginTop: 8,
+    height: height * 0.72,
     alignSelf: 'center',
-    backgroundColor: '#f0f0f0',
     borderRadius: 14,
     overflow: 'hidden',
   },
 
-  map: { ...StyleSheet.absoluteFillObject },
+  map: { flex: 1 },
 
-  markerCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#fff',
-    elevation: 5,
+  legendContainer: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    padding: 10,
+    borderRadius: 10,
+    zIndex: 20,
   },
 
-  markerText: {
+  legendTitle: {
     color: '#fff',
     fontWeight: 'bold',
-    fontSize: 14,
+    marginBottom: 6,
+    fontSize: 12,
   },
 
-  glowBackground: {
-    position: 'absolute',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#d32f2f',
-    top: -3,
-    left: -3,
-    zIndex: -1,
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+
+  legendDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginRight: 6,
+  },
+
+  legendText: {
+    color: '#fff',
+    fontSize: 11,
   },
 
   cardContainer: {
@@ -378,18 +429,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  loadingText: {
-    marginTop: 10,
-  },
-
   noConnection: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-
-  noConnectionText: {
-    marginTop: 10,
   },
 });
 

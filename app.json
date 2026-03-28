@@ -34,7 +34,7 @@
     },
     "extra": {
       "eas": {
-        "projectId": "e8ef58c6-b25c-4ef0-9125-4df017a528d6"
+        "projectId": "16c0f8bb-07d4-4003-8bcb-5af28778e6b7"
       }
     },
     "plugins": [
@@ -53,6 +53,7 @@
         }
       ],
       "@maplibre/maplibre-react-native"
-    ]
+    ],
+    "owner": "jxmes_1234"
   }
 }
