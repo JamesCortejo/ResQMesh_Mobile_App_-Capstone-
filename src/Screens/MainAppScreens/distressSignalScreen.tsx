@@ -6,8 +6,8 @@ import {
   TouchableOpacity,
   Modal,
   Animated,
-  Alert,
   AppState,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Picker } from '@react-native-picker/picker';
@@ -23,6 +23,15 @@ type DistressRecord = {
   reason?: string | null;
   timestamp?: string | null;
   user_code?: string | null;
+};
+
+type MessageModalType = 'success' | 'error' | 'info';
+
+type MessageModalState = {
+  visible: boolean;
+  title: string;
+  message: string;
+  type: MessageModalType;
 };
 
 const getDisplayReason = (reasonCode?: string | null): string => {
@@ -55,14 +64,14 @@ const normalizeDistress = (data: any): DistressRecord | null => {
       typeof data.timestamp === 'string'
         ? data.timestamp
         : typeof data.created_at === 'string'
-        ? data.created_at
-        : null,
+          ? data.created_at
+          : null,
     user_code:
       typeof data.user_code === 'string'
         ? data.user_code
         : typeof data.userCode === 'string'
-        ? data.userCode
-        : null,
+          ? data.userCode
+          : null,
   };
 };
 
@@ -81,14 +90,60 @@ const DistressSignalScreen = () => {
   const { user, nodeId } = useAuth();
 
   const [reason, setReason] = useState('');
-  const [modalVisible, setModalVisible] = useState(false);
+  const [confirmActivateVisible, setConfirmActivateVisible] = useState(false);
+  const [confirmCancelVisible, setConfirmCancelVisible] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [canceling, setCanceling] = useState(false);
+
+  const [activateCooldown, setActivateCooldown] = useState(0);
+  const [cancelCooldown, setCancelCooldown] = useState(0);
+
   const [activeDistress, setActiveDistress] = useState<DistressRecord | null>(null);
+  const [messageModal, setMessageModal] = useState<MessageModalState>({
+    visible: false,
+    title: '',
+    message: '',
+    type: 'info',
+  });
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const animationRef = useRef<Animated.CompositeAnimation | null>(null);
+  const isMounted = useRef(true);
+  const cooldownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 🔥 FIXED ANIMATION
+  const openMessageModal = useCallback(
+    (title: string, message: string, type: MessageModalType = 'info') => {
+      setMessageModal({
+        visible: true,
+        title,
+        message,
+        type,
+      });
+    },
+    []
+  );
+
+  useEffect(() => {
+    isMounted.current = true;
+
+    cooldownIntervalRef.current = setInterval(() => {
+      setActivateCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+      setCancelCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+
+    return () => {
+      isMounted.current = false;
+
+      if (cooldownIntervalRef.current) {
+        clearInterval(cooldownIntervalRef.current);
+        cooldownIntervalRef.current = null;
+      }
+
+      animationRef.current?.stop();
+      animationRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     if (activeDistress) {
       animationRef.current?.stop();
@@ -119,9 +174,14 @@ const DistressSignalScreen = () => {
     return () => {
       animationRef.current?.stop();
     };
-  }, [activeDistress]);
+  }, [activeDistress, pulseAnim]);
 
-  // 🔥 FIXED FETCH LOOP
+  useEffect(() => {
+    if (activeDistress) {
+      setCancelCooldown(15);
+    }
+  }, [activeDistress?.id]);
+
   const fetchActiveDistress = useCallback(async () => {
     if (!nodeId) return;
 
@@ -130,6 +190,8 @@ const DistressSignalScreen = () => {
       const payload = response.data?.distress ?? response.data;
       const normalized = normalizeDistress(payload);
 
+      if (!isMounted.current) return;
+
       setActiveDistress((prev) => {
         if (!normalized && !prev) return null;
         if (prev?.id === normalized?.id) return prev;
@@ -137,32 +199,32 @@ const DistressSignalScreen = () => {
       });
     } catch (error) {
       console.error('Failed to fetch active distress:', error);
-      setActiveDistress(null);
+      if (isMounted.current) {
+        setActiveDistress(null);
+      }
     }
   }, [nodeId]);
 
   useFocusEffect(
     useCallback(() => {
-      if (!activeDistress) {
-        fetchActiveDistress();
-      }
-    }, [fetchActiveDistress, activeDistress])
+      fetchActiveDistress();
+    }, [fetchActiveDistress])
   );
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active' && !activeDistress) {
+      if (nextState === 'active') {
         fetchActiveDistress();
       }
     });
 
     return () => subscription.remove();
-  }, [fetchActiveDistress, activeDistress]);
+  }, [fetchActiveDistress]);
 
   const handleActivate = async () => {
-    if (!reason || !nodeId || loading) return;
+    if (!reason || !nodeId || loading || activateCooldown > 0) return;
 
-    setModalVisible(false);
+    setConfirmActivateVisible(false);
     setLoading(true);
 
     try {
@@ -171,59 +233,96 @@ const DistressSignalScreen = () => {
         nodeId,
       });
 
+      if (!isMounted.current) return;
+
       const payload = response.data?.distress ?? response.data;
       const normalized = normalizeDistress(payload);
 
       if (normalized) {
         setActiveDistress(normalized);
-        setTimeout(() => {
-          Alert.alert('Distress Activated', 'Your distress signal has been sent.');
-        }, 50);
-      } else {
-        Alert.alert('Error', 'Invalid distress data received.');
-      }
-    } catch (error: any) {
-      if (error?.response?.status === 409) {
-        Alert.alert(
-          'Distress Active',
-          'Another distress signal is already active on this node.'
+        setReason('');
+        setCancelCooldown(15);
+        openMessageModal(
+          'Distress Activated',
+          'Your distress signal has been sent.',
+          'success'
         );
       } else {
-        Alert.alert(
+        openMessageModal('Error', 'Invalid distress data received.', 'error');
+      }
+    } catch (error: any) {
+      if (!isMounted.current) return;
+
+      if (error?.response?.status === 409) {
+        openMessageModal(
+          'Distress Active',
+          'Another distress signal is already active on this node.',
+          'error'
+        );
+      } else {
+        openMessageModal(
           'Error',
-          error?.response?.data?.error || 'Failed to activate distress.'
+          error?.response?.data?.error || 'Failed to activate distress.',
+          'error'
         );
       }
     } finally {
-      setLoading(false);
+      if (isMounted.current) {
+        setLoading(false);
+      }
     }
   };
 
-  const handleCancel = async () => {
-    if (!activeDistress?.id) return;
+  const cancelDistress = async (id: number | string) => {
+    if (cancelCooldown > 0 || canceling) return;
 
-    Alert.alert(
-      'Cancel Distress',
-      'Are you sure you want to cancel this distress signal?',
-      [
-        { text: 'No', style: 'cancel' },
-        {
-          text: 'Yes, Cancel',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.patch(`/api/distress/${activeDistress.id}/cancel`);
-              setActiveDistress(null);
-              Alert.alert('Canceled', 'Distress signal canceled.');
-            } catch (error) {
-              console.error(error);
-              Alert.alert('Error', 'Failed to cancel distress.');
-            }
-          },
-        },
-      ]
-    );
+    setCanceling(true);
+
+    try {
+      await api.patch(`/api/distress/${id}/cancel`);
+
+      if (!isMounted.current) return;
+
+      setActiveDistress(null);
+      setActivateCooldown(15);
+      openMessageModal('Canceled', 'Distress signal canceled.', 'success');
+    } catch (error) {
+      console.error(error);
+      if (isMounted.current) {
+        openMessageModal('Error', 'Failed to cancel distress.', 'error');
+      }
+    } finally {
+      if (isMounted.current) {
+        setCanceling(false);
+      }
+    }
   };
+
+  const handleCancel = () => {
+    if (!activeDistress?.id || cancelCooldown > 0 || canceling) return;
+    setConfirmCancelVisible(true);
+  };
+
+  const modalIconName =
+    messageModal.type === 'success'
+      ? 'checkmark-circle'
+      : messageModal.type === 'error'
+        ? 'close-circle'
+        : 'information-circle';
+
+  const modalIconColor =
+    messageModal.type === 'success'
+      ? '#2e7d32'
+      : messageModal.type === 'error'
+        ? '#d32f2f'
+        : '#1e88e5';
+
+  const modalAccentStyle =
+    messageModal.type === 'success'
+      ? styles.successAccent
+      : messageModal.type === 'error'
+        ? styles.errorAccent
+        : styles.infoAccent;
 
   if (activeDistress) {
     return (
@@ -254,19 +353,110 @@ const DistressSignalScreen = () => {
             {activeDistress.user_code &&
               user?.code &&
               activeDistress.user_code === user.code && (
-                <TouchableOpacity
-                  style={styles.cancelActiveButton}
-                  onPress={handleCancel}
-                >
-                  <Ionicons name="close-circle-outline" size={24} color="#fff" />
-                  <Text style={styles.cancelActiveText}>CANCEL DISTRESS</Text>
-                </TouchableOpacity>
+                <>
+                  <TouchableOpacity
+                    style={[
+                      styles.cancelActiveButton,
+                      (cancelCooldown > 0 || canceling) && styles.disabledCancelButton,
+                    ]}
+                    onPress={handleCancel}
+                    disabled={cancelCooldown > 0 || canceling}
+                  >
+                    <Ionicons name="close-circle-outline" size={24} color="#fff" />
+                    <Text style={styles.cancelActiveText}>
+                      {canceling
+                        ? 'CANCELING...'
+                        : cancelCooldown > 0
+                          ? `CANCEL AVAILABLE IN ${cancelCooldown}s`
+                          : 'CANCEL DISTRESS'}
+                    </Text>
+                  </TouchableOpacity>
+
+                  {cancelCooldown > 0 && (
+                    <Text style={styles.cooldownNote}>
+                      Please wait before canceling to confirm this is a real emergency.
+                    </Text>
+                  )}
+                </>
               )}
 
             <Text style={styles.note}>
               Rescuers have been notified. Stay calm.
             </Text>
           </View>
+
+          <Modal visible={loading} transparent animationType="fade">
+            <View style={styles.loadingOverlay}>
+              <View style={styles.loadingCard}>
+                <ActivityIndicator size="large" color="#d32f2f" />
+                <Text style={styles.loadingText}>Sending distress signal...</Text>
+              </View>
+            </View>
+          </Modal>
+
+          <Modal
+            visible={confirmCancelVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setConfirmCancelVisible(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalCard, styles.cancelConfirmCard]}>
+                <Ionicons name="help-circle" size={52} color="#8b0000" />
+                <Text style={styles.modalTitle}>Cancel Distress</Text>
+                <Text style={styles.modalText}>
+                  Are you sure you want to cancel this distress signal?
+                </Text>
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={styles.modalSecondaryButton}
+                    onPress={() => setConfirmCancelVisible(false)}
+                  >
+                    <Text style={styles.modalSecondaryButtonText}>No</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.modalPrimaryButton}
+                    onPress={() => {
+                      setConfirmCancelVisible(false);
+                      void cancelDistress(activeDistress.id);
+                    }}
+                  >
+                    <Text style={styles.modalPrimaryButtonText}>Yes, Cancel</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          <Modal
+            visible={messageModal.visible}
+            transparent
+            animationType="fade"
+            onRequestClose={() =>
+              setMessageModal((prev) => ({ ...prev, visible: false }))
+            }
+          >
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalCard, modalAccentStyle]}>
+                <Ionicons name={modalIconName as any} size={52} color={modalIconColor} />
+                <Text style={styles.modalTitle}>{messageModal.title}</Text>
+                <Text style={styles.modalText}>{messageModal.message}</Text>
+
+                <View style={styles.singleModalAction}>
+                  <TouchableOpacity
+                    style={styles.modalPrimaryButton}
+                    onPress={() =>
+                      setMessageModal((prev) => ({ ...prev, visible: false }))
+                    }
+                  >
+                    <Text style={styles.modalPrimaryButtonText}>OK</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
         </View>
       </MainLayout>
     );
@@ -290,7 +480,8 @@ const DistressSignalScreen = () => {
           <View style={styles.infoBox}>
             <Ionicons name="information-circle-outline" size={18} color="#1e88e5" />
             <Text style={styles.infoText}>
-              This will alert nearby devices and responders connected to the mesh network.
+              This will alert nearby devices and responders connected to the mesh
+              network.
             </Text>
           </View>
 
@@ -310,7 +501,7 @@ const DistressSignalScreen = () => {
               selectedValue={reason}
               onValueChange={(v) => setReason(v)}
               style={styles.picker}
-              enabled={!loading}
+              enabled={!loading && activateCooldown === 0}
             >
               <Picker.Item label="Select reason..." value="" />
               <Picker.Item label="Road Accident" value="road_accident" />
@@ -326,40 +517,97 @@ const DistressSignalScreen = () => {
         <TouchableOpacity
           style={[
             styles.activateButton,
-            (!reason || loading) && styles.disabledButton,
+            (!reason || loading || activateCooldown > 0) && styles.disabledButton,
           ]}
-          disabled={!reason || loading}
-          onPress={() => setModalVisible(true)}
+          disabled={!reason || loading || activateCooldown > 0}
+          onPress={() => setConfirmActivateVisible(true)}
         >
           <Ionicons name="alert-circle-outline" size={20} color="#fff" />
           <Text style={styles.activateText}>
-            {loading ? 'Sending Signal...' : 'Proceed to Activation'}
+            {loading
+              ? 'Sending Signal...'
+              : activateCooldown > 0
+                ? `WAIT ${activateCooldown}S`
+                : 'Proceed to Activation'}
           </Text>
         </TouchableOpacity>
+
+        {activateCooldown > 0 && (
+          <Text style={styles.cooldownNoteNormal}>
+            Please wait before activating again.
+          </Text>
+        )}
 
         <Text style={styles.footerNote}>
           Only use this feature during real emergencies.
         </Text>
 
-        <Modal visible={modalVisible} transparent animationType="fade">
+        <Modal
+          visible={confirmActivateVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setConfirmActivateVisible(false)}
+        >
           <View style={styles.modalOverlay}>
-            <View style={styles.modalCard}>
+            <View style={[styles.modalCard, styles.confirmCard]}>
+              <Ionicons name="warning" size={52} color="#d32f2f" />
               <Text style={styles.modalTitle}>Confirm Distress</Text>
               <Text style={styles.modalText}>Activate distress signal?</Text>
 
               <View style={styles.modalActions}>
                 <TouchableOpacity
-                  style={styles.cancelButton}
-                  onPress={() => setModalVisible(false)}
+                  style={styles.modalSecondaryButton}
+                  onPress={() => setConfirmActivateVisible(false)}
                 >
-                  <Text style={styles.cancelText}>Cancel</Text>
+                  <Text style={styles.modalSecondaryButtonText}>Cancel</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={styles.confirmButton}
+                  style={[
+                    styles.modalPrimaryButton,
+                    (loading || activateCooldown > 0) && styles.disabledModalButton,
+                  ]}
                   onPress={handleActivate}
+                  disabled={loading || activateCooldown > 0}
                 >
-                  <Text style={styles.confirmText}>Activate</Text>
+                  <Text style={styles.modalPrimaryButtonText}>Activate</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal visible={loading} transparent animationType="fade">
+          <View style={styles.loadingOverlay}>
+            <View style={styles.loadingCard}>
+              <ActivityIndicator size="large" color="#d32f2f" />
+              <Text style={styles.loadingText}>Sending distress signal...</Text>
+            </View>
+          </View>
+        </Modal>
+
+        <Modal
+          visible={messageModal.visible}
+          transparent
+          animationType="fade"
+          onRequestClose={() =>
+            setMessageModal((prev) => ({ ...prev, visible: false }))
+          }
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalCard, modalAccentStyle]}>
+              <Ionicons name={modalIconName as any} size={52} color={modalIconColor} />
+              <Text style={styles.modalTitle}>{messageModal.title}</Text>
+              <Text style={styles.modalText}>{messageModal.message}</Text>
+
+              <View style={styles.singleModalAction}>
+                <TouchableOpacity
+                  style={styles.modalPrimaryButton}
+                  onPress={() =>
+                    setMessageModal((prev) => ({ ...prev, visible: false }))
+                  }
+                >
+                  <Text style={styles.modalPrimaryButtonText}>OK</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -473,6 +721,7 @@ const styles = StyleSheet.create({
 
   disabledButton: {
     backgroundColor: '#e0a0a0',
+    opacity: 0.7,
   },
 
   activateText: {
@@ -488,10 +737,19 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
 
+  cooldownNoteNormal: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#8b0000',
+    marginTop: 8,
+    marginBottom: 4,
+  },
+
   activeCard: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 20,
   },
 
   activeTitle: {
@@ -499,18 +757,23 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#8b0000',
     marginTop: 12,
+    textAlign: 'center',
   },
 
   activeReason: {
     fontSize: 20,
     color: '#8b0000',
     marginVertical: 10,
+    textAlign: 'center',
+    flexWrap: 'wrap',
+    maxWidth: '90%',
   },
 
   activeTime: {
     fontSize: 14,
     color: '#8b0000',
     marginBottom: 30,
+    textAlign: 'center',
   },
 
   cancelActiveButton: {
@@ -521,6 +784,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
+  disabledCancelButton: {
+    backgroundColor: '#c06060',
+    opacity: 0.7,
+  },
+
   cancelActiveText: {
     color: '#fff',
     marginLeft: 8,
@@ -529,6 +797,40 @@ const styles = StyleSheet.create({
   note: {
     marginTop: 20,
     color: '#8b0000',
+    textAlign: 'center',
+  },
+
+  cooldownNote: {
+    marginTop: 8,
+    fontSize: 12,
+    color: '#8b0000',
+    textAlign: 'center',
+    paddingHorizontal: 20,
+    fontStyle: 'italic',
+  },
+
+  loadingOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  loadingCard: {
+    width: '80%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+
+  loadingText: {
+    marginTop: 12,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+    textAlign: 'center',
   },
 
   modalOverlay: {
@@ -539,47 +841,95 @@ const styles = StyleSheet.create({
   },
 
   modalCard: {
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 20,
     width: '85%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+
+  confirmCard: {
+    borderTopWidth: 5,
+    borderTopColor: '#d32f2f',
+  },
+
+  cancelConfirmCard: {
+    borderTopWidth: 5,
+    borderTopColor: '#8b0000',
+  },
+
+  successAccent: {
+    borderTopWidth: 5,
+    borderTopColor: '#2e7d32',
+  },
+
+  errorAccent: {
+    borderTopWidth: 5,
+    borderTopColor: '#d32f2f',
+  },
+
+  infoAccent: {
+    borderTopWidth: 5,
+    borderTopColor: '#1e88e5',
   },
 
   modalTitle: {
-    fontSize: 18,
+    marginTop: 10,
+    fontSize: 20,
     fontWeight: '700',
+    color: '#222',
     textAlign: 'center',
   },
 
   modalText: {
-    marginVertical: 10,
+    marginTop: 8,
+    fontSize: 14,
+    color: '#444',
     textAlign: 'center',
+    lineHeight: 20,
   },
 
   modalActions: {
     flexDirection: 'row',
     justifyContent: 'center',
+    marginTop: 18,
   },
 
-  cancelButton: {
-    padding: 10,
+  singleModalAction: {
+    marginTop: 18,
+    width: '100%',
+    alignItems: 'center',
+  },
+
+  modalSecondaryButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
     backgroundColor: '#eee',
-    borderRadius: 8,
+    borderRadius: 10,
     marginRight: 12,
   },
 
-  confirmButton: {
-    padding: 10,
+  modalSecondaryButtonText: {
+    color: '#333',
+    fontWeight: '700',
+  },
+
+  modalPrimaryButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
     backgroundColor: '#d32f2f',
-    borderRadius: 8,
+    borderRadius: 10,
   },
 
-  confirmText: {
+  modalPrimaryButtonText: {
     color: '#fff',
+    fontWeight: '700',
   },
 
-  cancelText: {
-    fontWeight: '600',
+  disabledModalButton: {
+    backgroundColor: '#e0a0a0',
+    opacity: 0.7,
   },
 });
 
