@@ -11,6 +11,7 @@ import {
 } from 'react-native'
 import { Ionicons } from '@expo/vector-icons'
 import { useFocusEffect } from '@react-navigation/native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import MainLayout from '../../layouts/MainLayout'
 import WelcomeCard from '../../components/WelcomeCard'
 import { MeshNode } from '../../types/MeshNode'
@@ -20,6 +21,7 @@ import { NODE_INACTIVE_TIMEOUT_MS } from '../../constants/timeouts'
 
 type MeshNodeWithSignal = MeshNode & {
   signal?: number | string | null
+  lastSeen?: string | number | null
 }
 
 const MainChatScreen = memo(() => {
@@ -34,7 +36,7 @@ const MainChatScreen = memo(() => {
   const glowAnim = useRef(new Animated.Value(0)).current
 
   useEffect(() => {
-    Animated.loop(
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(glowAnim, {
           toValue: 1,
@@ -47,14 +49,38 @@ const MainChatScreen = memo(() => {
           useNativeDriver: false
         })
       ])
-    ).start()
+    )
+
+    loop.start()
+    return () => loop.stop()
   }, [glowAnim])
+
+  const toMs = (value: unknown): number => {
+    if (typeof value === 'number') {
+      return value < 1e12 ? value * 1000 : value
+    }
+
+    if (typeof value === 'string') {
+      const asNumber = Number(value)
+      if (!Number.isNaN(asNumber) && Number.isFinite(asNumber)) {
+        return asNumber < 1e12 ? asNumber * 1000 : asNumber
+      }
+
+      const parsed = Date.parse(value)
+      return Number.isNaN(parsed) ? NaN : parsed
+    }
+
+    return NaN
+  }
 
   const isNodeActive = (node: MeshNodeWithSignal) => {
     if (node.id === connectedNodeId) return true
     if (!node.lastSeen) return false
-    const lastSeen = new Date(node.lastSeen).getTime()
-    return Date.now() - lastSeen < NODE_INACTIVE_TIMEOUT_MS
+
+    const lastSeenMs = toMs(node.lastSeen)
+    if (Number.isNaN(lastSeenMs)) return false
+
+    return Date.now() - lastSeenMs < NODE_INACTIVE_TIMEOUT_MS
   }
 
   const formatDistance = (meters?: number | null) => {
@@ -79,7 +105,6 @@ const MainChatScreen = memo(() => {
 
     const rawSignal = getRawSignal(node)
 
-    // If backend ever returns a real signal value, use it.
     if (rawSignal !== null) {
       if (rawSignal >= -70) return 4
       if (rawSignal >= -85) return 3
@@ -87,10 +112,12 @@ const MainChatScreen = memo(() => {
       return 1
     }
 
-    // Otherwise compute a stable "signal quality" from freshness + distance.
     if (!node.lastSeen) return 0
 
-    const ageMs = Date.now() - new Date(node.lastSeen).getTime()
+    const lastSeenMs = toMs(node.lastSeen)
+    if (Number.isNaN(lastSeenMs)) return 0
+
+    const ageMs = Date.now() - lastSeenMs
     if (ageMs > 30000) return 0
 
     let freshness = 1
@@ -166,42 +193,58 @@ const MainChatScreen = memo(() => {
     )
   }
 
-  const loadNodes = useCallback(async () => {
+  const hasToken = useCallback(async (): Promise<boolean> => {
     try {
-      const statusRes = await api.get('/api/status', { timeout: 3000 })
+      const token = await AsyncStorage.getItem('accessToken')
+      return !!token
+    } catch {
+      return false
+    }
+  }, [])
+
+  const loadNodes = useCallback(async () => {
+    if (!(await hasToken())) {
+      console.log('loadNodes: skipping — no token yet')
+      return
+    }
+
+    try {
+      const statusRes = await api.get('/api/status', { timeout: 5000 })
       const localNodeId = statusRes.data.node_id
       setConnectedNodeId(localNodeId)
 
       const nodesRes = await api.get('/api/nodes')
+
       const allNodes: MeshNodeWithSignal[] = nodesRes.data.map((node: any) => ({
         ...node,
         distress: node.distress === true,
         distanceMeters: node.distanceMeters ?? null,
-        signal: node.signal ?? null
+        signal: node.signal ?? null,
+        lastSeen: node.lastSeen ?? node.timestamp ?? null
       }))
 
-      allNodes.sort((a, b) => {
-        if (a.id === localNodeId) return -1
-        if (b.id === localNodeId) return 1
-        return 0
-      })
-
-      setNodes(allNodes)
+      const otherNodes = allNodes.filter(node => node.id !== localNodeId)
+      setNodes(otherNodes)
       setError(null)
-    } catch (err) {
-      console.log('loadNodes error', err)
+    } catch (err: any) {
+      console.log('loadNodes error code   :', err.code)
+      console.log('loadNodes error status :', err.response?.status)
+      console.log('loadNodes error message:', err.message)
+      console.log('loadNodes error url    :', err.config?.url)
       setError('Cannot connect to mesh')
     }
-  }, [])
+  }, [hasToken])
 
   const fetchUnreadCounts = useCallback(async () => {
+    if (!(await hasToken())) return
+
     try {
       const response = await api.get('/api/messages/unread')
       setUnreadCounts(response.data)
-    } catch (err) {
-      console.error('Failed to fetch unread counts', err)
+    } catch (err: any) {
+      console.log('fetchUnreadCounts error:', err.response?.status, err.message)
     }
-  }, [])
+  }, [hasToken])
 
   const initialLoad = useCallback(async () => {
     setLoading(true)
@@ -216,6 +259,7 @@ const MainChatScreen = memo(() => {
       loadNodes()
       fetchUnreadCounts()
     }, 10000)
+
     return () => clearInterval(interval)
   }, [initialLoad, loadNodes, fetchUnreadCounts])
 
@@ -243,7 +287,6 @@ const MainChatScreen = memo(() => {
 
     const isBroadcast = item.id === 'BROADCAST'
     const active = isBroadcast ? true : isNodeActive(item)
-    const isConnected = item.id === connectedNodeId
 
     let stateLabel = ''
     let stateColor = ''
@@ -284,7 +327,6 @@ const MainChatScreen = memo(() => {
         style={[
           styles.card,
           item.distress && !isBroadcast && { backgroundColor: animatedBackground },
-          isConnected && styles.connectedCard,
           !active && !isBroadcast && styles.inactiveCard
         ]}
       >
@@ -379,10 +421,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16
   },
-  connectedCard: {
-    borderWidth: 2,
-    borderColor: '#4caf50'
-  },
   inactiveCard: {
     opacity: 0.5
   },
@@ -422,12 +460,12 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     marginLeft: 8,
     minWidth: 20,
-    alignItems: 'center',
+    alignItems: 'center'
   },
   unreadText: {
     color: '#fff',
     fontSize: 11,
-    fontWeight: 'bold',
+    fontWeight: 'bold'
   },
   row: {
     flexDirection: 'row',

@@ -1,4 +1,10 @@
-import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import React, {
+  useState,
+  useCallback,
+  useEffect,
+  useRef,
+  useMemo,
+} from 'react';
 import {
   View,
   Text,
@@ -11,7 +17,7 @@ import {
   Platform,
   StatusBar,
   ActivityIndicator,
-  Alert,
+  Modal,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -29,7 +35,8 @@ import {
 import { Audio } from 'expo-av';
 import { File, Paths } from 'expo-file-system';
 
-const MAX_MESSAGE_LENGTH = 150;
+const MAX_MESSAGE_LENGTH = 130;
+const MAX_VOICE_SECONDS = 10;
 
 type NavProp = StackNavigationProp<RootStackParamList, 'MeshNodeChat'>;
 type MeshNodeChatRouteProp = RouteProp<RootStackParamList, 'MeshNodeChat'>;
@@ -37,6 +44,8 @@ type MeshNodeChatRouteProp = RouteProp<RootStackParamList, 'MeshNodeChat'>;
 interface Props {
   navigation: NavProp;
 }
+
+type SenderRole = 'civilian' | 'rescuer' | 'unknown';
 
 interface Message {
   id: number;
@@ -48,14 +57,23 @@ interface Message {
   type: string;
   timestamp: string;
   status: string;
+  senderRole?: string | null;
+  senderType?: string | null;
+  role?: string | null;
+  sourceNodeId?: string | null;
+  destinationNodeId?: string | null;
 }
 
+const getSourceNodeFromUserCode = (userCode: string): string | null => {
+  const match = userCode?.match(/[A-Z]{2}\d{3}(.+)$/);
+  return match ? match[1] : null;
+};
+
 // ---------------------------
-// Waveform Component (deterministic, based on message id)
+// Waveform Component
 // ---------------------------
 const Waveform = ({ isPlaying, seed }: { isPlaying: boolean; seed: number }) => {
   const bars = useMemo(() => {
-    // deterministic pseudo‑random heights (range 5‑25)
     const random = (min: number, max: number, idx: number) => {
       const x = Math.sin(seed + idx) * 10000;
       return min + (Math.abs(x) % (max - min));
@@ -88,6 +106,8 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
   const { nodeId, nodeName, users } = route.params;
   const { user } = useAuth();
 
+  const [localNodeId, setLocalNodeId] = useState<string | null>(null);
+
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(true);
@@ -101,69 +121,155 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [playingMessageId, setPlayingMessageId] = useState<number | null>(null);
 
-  // State for durations (key: message id, value: duration in milliseconds)
-  const [durations, setDurations] = useState<{ [key: number]: number }>({});
+  const [durations, setDurations] = useState<Record<number, number>>({});
 
-  const flatListRef = useRef<FlatList>(null);
+  // Modal states
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalTitle, setModalTitle] = useState('');
+  const [modalMessage, setModalMessage] = useState('');
+  const [modalConfirmText, setModalConfirmText] = useState('OK');
+  const [modalOnConfirm, setModalOnConfirm] = useState<(() => void) | null>(null);
+  const [modalCancelText, setModalCancelText] = useState<string | null>(null);
+  const [modalOnCancel, setModalOnCancel] = useState<(() => void) | null>(null);
+
+  // Voice sending progress modal
+  const [voiceProgressVisible, setVoiceProgressVisible] = useState(false);
+  const [progressMessage, setProgressMessage] = useState('');
+
+  const flatListRef = useRef<FlatList<Message>>(null);
   const playbackSoundRef = useRef<Audio.Sound | null>(null);
   const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const loadingDurationIds = useRef(new Set<number>()); // prevent concurrent loads
+  const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ✅ Ref-based recording flag — never stale inside timer callbacks
+  const isRecordingRef = useRef(false);
+
+  const loadingDurationIds = useRef(new Set<number>());
 
   const isBroadcast = nodeId === 'BROADCAST';
 
-  // ---------- Duration Loading for Voice Messages ----------
-  const loadDuration = useCallback(async (item: Message) => {
-  if (item.type !== 'voice') return;
-  if (durations[item.id]) return;
-  if (loadingDurationIds.current.has(item.id)) return;
+  const scrollToBottom = useCallback((animated = true) => {
+    requestAnimationFrame(() => {
+      flatListRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
 
-  loadingDurationIds.current.add(item.id);
-  try {
-    const file = new File(Paths.cache, `voice_${item.id}.m4a`);
-    await file.write(item.content, { encoding: 'base64' });
-
-    const { sound, status } = await Audio.Sound.createAsync(
-      { uri: file.uri },
-      { shouldPlay: false }
-    );
-
-    if (status.isLoaded && status.durationMillis) {
-      const duration = status.durationMillis;
-      setDurations(prev => ({
-        ...prev,
-        [item.id]: duration,
-      }));
-    }
-
-    await sound.unloadAsync();
-  } catch (e) {
-    console.log("Duration load error:", e);
-  } finally {
-    loadingDurationIds.current.delete(item.id);
-  }
-}, [durations]);
-
-  // Trigger duration loading for all voice messages that don't have a duration yet
+  // Fetch local node id once
   useEffect(() => {
-    const voiceMessages = messages.filter(m => m.type === 'voice');
-    for (const msg of voiceMessages) {
-      loadDuration(msg);
+    const loadLocalNode = async () => {
+      try {
+        const response = await api.get('/api/status', { timeout: 3000 });
+        setLocalNodeId(response.data?.node_id ?? null);
+      } catch (error) {
+        console.log('Failed to load local node id:', error);
+      }
+    };
+    loadLocalNode();
+  }, []);
+
+  // ---------- Modal helpers ----------
+  const showAlert = (title: string, message: string) => {
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalConfirmText('OK');
+    setModalCancelText(null);
+    setModalOnConfirm(() => () => setModalVisible(false));
+    setModalOnCancel(null);
+    setModalVisible(true);
+  };
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalConfirmText('Send');
+    setModalCancelText('Cancel');
+    setModalOnConfirm(() => () => {
+      setModalVisible(false);
+      onConfirm();
+    });
+    setModalOnCancel(() => () => setModalVisible(false));
+    setModalVisible(true);
+  };
+
+  const normalizeRole = (value?: string | null): SenderRole => {
+    const v = String(value ?? '').trim().toLowerCase();
+    if (v === 'civilian' || v === 'civ' || v === 'user') return 'civilian';
+    if (v === 'rescuer' || v === 'rescue' || v === 'responder') return 'rescuer';
+    return 'unknown';
+  };
+
+  const getCurrentUserRole = (): SenderRole => {
+    const rawRole =
+      (user as any)?.role ??
+      (user as any)?.userType ??
+      (user as any)?.accountType ??
+      (user as any)?.type ??
+      null;
+    return normalizeRole(rawRole);
+  };
+
+  const getDisplayRole = (item: Message, isMe: boolean): SenderRole => {
+    const explicitRole = normalizeRole(
+      item.senderRole ?? item.senderType ?? item.role ?? null
+    );
+    if (explicitRole !== 'unknown') return explicitRole;
+    if (isMe) {
+      const currentUserRole = getCurrentUserRole();
+      if (currentUserRole !== 'unknown') return currentUserRole;
     }
+    return 'unknown';
+  };
+
+  const getRoleLabel = (role: SenderRole) => {
+    if (role === 'rescuer') return '(Rescuer)';
+    if (role === 'civilian') return '(Civilian)';
+    return '(Unknown)';
+  };
+
+  // ---------- Duration Loading for Voice Messages ----------
+  const loadDuration = useCallback(
+    async (item: Message) => {
+      if (item.type !== 'voice') return;
+      if (item.id in durations) return;
+      if (loadingDurationIds.current.has(item.id)) return;
+
+      loadingDurationIds.current.add(item.id);
+
+      try {
+        const file = new File(Paths.cache, `voice_${item.id}.m4a`);
+        await file.write(item.content, { encoding: 'base64' });
+
+        const { sound, status } = await Audio.Sound.createAsync(
+          { uri: file.uri },
+          { shouldPlay: false }
+        );
+
+        if (status.isLoaded && typeof status.durationMillis === 'number') {
+          const duration = status.durationMillis;
+          setDurations((prev) => ({ ...prev, [item.id]: duration }));
+        }
+
+        await sound.unloadAsync();
+      } catch (e) {
+        console.log('Duration load error:', e);
+      } finally {
+        loadingDurationIds.current.delete(item.id);
+      }
+    },
+    [durations]
+  );
+
+  useEffect(() => {
+    const voiceMessages = messages.filter((m) => m.type === 'voice');
+    for (const msg of voiceMessages) loadDuration(msg);
   }, [messages, loadDuration]);
 
   // ---------- Lifecycle Cleanup ----------
   useEffect(() => {
     return () => {
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-
-      if (playbackSoundRef.current) {
-        playbackSoundRef.current.unloadAsync().catch(() => {});
-        playbackSoundRef.current = null;
-      }
-
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+      if (autoStopTimerRef.current) clearTimeout(autoStopTimerRef.current);
+      if (playbackSoundRef.current) playbackSoundRef.current.unloadAsync().catch(() => {});
       cancelRecording().catch(() => {});
     };
   }, []);
@@ -183,9 +289,13 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
       } finally {
         setLoading(false);
         if (showRefreshing) setRefreshing(false);
+
+        setTimeout(() => {
+          scrollToBottom(false);
+        }, 150);
       }
     },
-    [nodeId]
+    [nodeId, scrollToBottom]
   );
 
   useEffect(() => {
@@ -195,7 +305,13 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
   useFocusEffect(
     useCallback(() => {
       fetchMessages();
-    }, [fetchMessages])
+
+      const timer = setTimeout(() => {
+        scrollToBottom(false);
+      }, 200);
+
+      return () => clearTimeout(timer);
+    }, [fetchMessages, scrollToBottom])
   );
 
   useFocusEffect(
@@ -212,18 +328,16 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
   );
 
   useEffect(() => {
-    if (messages.length > 0) {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }
-  }, [messages]);
+    const timer = setTimeout(() => {
+      scrollToBottom(false);
+    }, 150);
+
+    return () => clearTimeout(timer);
+  }, [messages, scrollToBottom]);
 
   useEffect(() => {
     if (isBroadcast) return;
-
-    const interval = setInterval(() => {
-      setNodeOnline(Math.random() > 0.2);
-    }, 5000);
-
+    const interval = setInterval(() => setNodeOnline(Math.random() > 0.2), 5000);
     return () => clearInterval(interval);
   }, [isBroadcast]);
 
@@ -246,12 +360,9 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
         await stopCurrentPlayback();
         return;
       }
-
       await stopCurrentPlayback();
-
       if (!item.content) return;
 
-      // Create file and write base64
       const file = new File(Paths.cache, `voice_${item.id}.m4a`);
       await file.write(item.content, { encoding: 'base64' });
 
@@ -264,80 +375,97 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
       setPlayingMessageId(item.id);
 
       sound.setOnPlaybackStatusUpdate((status: any) => {
-        if (!status.isLoaded) return;
-        if (status.didJustFinish) {
+        if (status.isLoaded && status.didJustFinish) {
           stopCurrentPlayback().catch(() => {});
         }
       });
-
     } catch (error) {
       console.error('Voice playback failed:', error);
-      Alert.alert('Playback error', 'Could not play this voice clip.');
+      showAlert('Playback error', 'Could not play this voice clip.');
     }
   };
 
-  // ---------- Voice Recording ----------
+  // ---------- Voice Recording — tap to start/stop, auto-stop at 10s ----------
+
+  const finishVoiceRecording = useCallback(async () => {
+    if (!isRecordingRef.current) return;
+
+    isRecordingRef.current = false;
+
+    if (autoStopTimerRef.current) {
+      clearTimeout(autoStopTimerRef.current);
+      autoStopTimerRef.current = null;
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+
+    setIsRecording(false);
+    setSendingVoice(true);
+    setVoiceProgressVisible(true);
+    setProgressMessage('Encoding voice...');
+
+    try {
+      const uri = await stopRecording();
+      setProgressMessage('Preparing audio...');
+      const base64 = await audioToBase64(uri);
+      setProgressMessage('Sending voice message...');
+      await sendVoiceMessage(nodeId, base64);
+      await fetchMessages();
+    } catch (error: any) {
+      console.error('Stop/send recording failed:', error);
+      showAlert(
+        'Voice message failed',
+        error.response?.data?.error || 'Could not send the voice message.'
+      );
+      try {
+        await cancelRecording();
+      } catch {}
+    } finally {
+      setSendingVoice(false);
+      setRecordingSeconds(0);
+      setVoiceProgressVisible(false);
+      setProgressMessage('');
+      setTimeout(() => {
+        scrollToBottom(false);
+      }, 150);
+    }
+  }, [fetchMessages, nodeId, scrollToBottom]);
+
   const startVoiceRecording = useCallback(async () => {
-    if (isRecording || sending || sendingVoice) return;
+    if (isRecordingRef.current || sending || sendingVoice) return;
 
     try {
       await stopCurrentPlayback();
-
       await startRecording();
+
+      isRecordingRef.current = true;
       setIsRecording(true);
       setRecordingSeconds(0);
 
       recordingTimerRef.current = setInterval(() => {
         setRecordingSeconds((prev) => prev + 1);
       }, 1000);
+
+      autoStopTimerRef.current = setTimeout(() => {
+        finishVoiceRecording();
+      }, MAX_VOICE_SECONDS * 1000);
     } catch (error) {
       console.error('Start recording failed:', error);
-      Alert.alert('Recording error', 'Could not start voice recording.');
+      showAlert('Recording error', 'Could not start voice recording.');
+      isRecordingRef.current = false;
       setIsRecording(false);
     }
-  }, [isRecording, sending, sendingVoice, stopCurrentPlayback]);
+  }, [sending, sendingVoice, stopCurrentPlayback, finishVoiceRecording]);
 
-  const finishVoiceRecording = useCallback(async () => {
-    if (!isRecording) return;
-
-    try {
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-        recordingTimerRef.current = null;
-      }
-
-      setIsRecording(false);
-      setSendingVoice(true);
-
-      const uri = await stopRecording();
-      const base64 = await audioToBase64(uri);
-
-      await sendVoiceMessage(nodeId, base64);
-      await fetchMessages();
-    } catch (error: any) {
-      console.error('Stop/send recording failed:', error);
-      Alert.alert(
-        'Voice message failed',
-        error.response?.data?.error || 'Could not send the voice message.'
-      );
-      try {
-        await cancelRecording();
-      } catch {
-        // ignore cleanup errors
-      }
-    } finally {
-      setSendingVoice(false);
-      setRecordingSeconds(0);
+  const handleMicTap = useCallback(() => {
+    if (isRecordingRef.current) {
+      finishVoiceRecording();
+    } else {
+      startVoiceRecording();
     }
-  }, [fetchMessages, isRecording, nodeId]);
-
-  const handleMicPressIn = useCallback(() => {
-    startVoiceRecording();
-  }, [startVoiceRecording]);
-
-  const handleMicPressOut = useCallback(() => {
-    finishVoiceRecording();
-  }, [finishVoiceRecording]);
+  }, [startVoiceRecording, finishVoiceRecording]);
 
   // ---------- Text Messaging ----------
   const handleSend = async () => {
@@ -345,6 +473,7 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
     if (!trimmed || trimmed.length > MAX_MESSAGE_LENGTH || sending || isRecording || sendingVoice) return;
 
     setSending(true);
+
     const tempId = Date.now();
     const optimisticMessage: Message = {
       id: tempId,
@@ -356,62 +485,55 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
       type: 'text',
       timestamp: new Date().toISOString(),
       status: 'queued',
+      sourceNodeId: localNodeId,
+      destinationNodeId: nodeId,
     };
+
     setMessages((prev) => [...prev, optimisticMessage]);
     setInputText('');
 
     try {
-      await api.post('/api/messages', {
-        nodeId,
-        content: trimmed,
-        type: 'text',
-      });
+      await api.post('/api/messages', { nodeId, content: trimmed, type: 'text' });
       await fetchMessages();
     } catch (err: any) {
       console.error('Failed to send message', err);
       const errorMsg = err.response?.data?.error || 'Could not send message. Please try again.';
-      Alert.alert('Error', errorMsg);
+      showAlert('Error', errorMsg);
       setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
     } finally {
       setSending(false);
+      setTimeout(() => {
+        scrollToBottom(true);
+      }, 100);
     }
   };
 
-  const handleBroadcast = useCallback(async () => {
+  const handleBroadcast = useCallback(() => {
     const trimmed = inputText.trim();
     if (!trimmed || trimmed.length > MAX_MESSAGE_LENGTH || sending) return;
 
-    Alert.alert(
+    showConfirm(
       'Broadcast Message',
       'This message will be sent to ALL nodes in the mesh. Continue?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Send',
-          onPress: async () => {
-            setSending(true);
-            try {
-              await api.post('/api/messages/broadcast', {
-                content: trimmed,
-                type: 'broadcast',
-              });
-              setInputText('');
-              Alert.alert('Broadcast Sent', 'Your message has been broadcast.');
-              if (isBroadcast) {
-                await fetchMessages();
-              }
-            } catch (err: any) {
-              console.error('Broadcast failed', err);
-              const msg = err.response?.data?.error || 'Could not send broadcast.';
-              Alert.alert('Error', msg);
-            } finally {
-              setSending(false);
-            }
-          },
-        },
-      ]
+      async () => {
+        setSending(true);
+        try {
+          await api.post('/api/messages/broadcast', { content: trimmed, type: 'broadcast' });
+          setInputText('');
+          showAlert('Broadcast Sent', 'Your message has been broadcast.');
+          if (isBroadcast) await fetchMessages();
+        } catch (err: any) {
+          console.error('Broadcast failed', err);
+          showAlert('Error', err.response?.data?.error || 'Could not send broadcast.');
+        } finally {
+          setSending(false);
+          setTimeout(() => {
+            scrollToBottom(true);
+          }, 100);
+        }
+      }
     );
-  }, [inputText, sending, isBroadcast, fetchMessages]);
+  }, [inputText, sending, isBroadcast, fetchMessages, scrollToBottom]);
 
   // ---------- Helpers ----------
   const formatTime = (timestamp: string) => {
@@ -457,22 +579,38 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
   // ---------- Message Rendering ----------
   const renderMessage = ({ item }: { item: Message }) => {
     const isMe = item.senderCode === user?.code;
+    const displayRole = getDisplayRole(item, isMe);
+
+    const sourceNode =
+      !isMe
+        ? item.sourceNodeId || getSourceNodeFromUserCode(item.senderCode)
+        : null;
+
+    const bubbleStyle =
+      displayRole === 'rescuer'
+        ? styles.rescuerMessage
+        : displayRole === 'civilian'
+        ? styles.civilianMessage
+        : styles.unknownMessage;
+
+    const roleTagStyle =
+      displayRole === 'rescuer'
+        ? styles.rescuerRoleTag
+        : displayRole === 'civilian'
+        ? styles.civilianRoleTag
+        : styles.unknownRoleTag;
 
     return (
-      <View
-        style={[
-          styles.messageWrapper,
-          isMe ? styles.alignRight : styles.alignLeft,
-        ]}
-      >
-        {!isMe && <Text style={styles.senderName}>{item.senderName}</Text>}
+      <View style={[styles.messageWrapper, isMe ? styles.alignRight : styles.alignLeft]}>
+        <Text style={styles.senderNameRow}>
+          <Text style={styles.senderName}>{item.senderName}</Text>
+          <Text style={[styles.roleTag, roleTagStyle]}> {getRoleLabel(displayRole)}</Text>
+          {sourceNode && sourceNode !== 'BROADCAST' && (
+            <Text style={styles.sourceNodeTag}> from {sourceNode}</Text>
+          )}
+        </Text>
 
-        <View
-          style={[
-            styles.messageBubble,
-            isMe ? styles.myMessage : styles.otherMessage,
-          ]}
-        >
+        <View style={[styles.messageBubble, bubbleStyle]}>
           {item.type === 'voice' ? (
             <TouchableOpacity
               style={styles.voiceRow}
@@ -482,23 +620,19 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
               <Ionicons
                 name={playingMessageId === item.id ? 'stop-circle-outline' : 'play-circle-outline'}
                 size={24}
-                color={isMe ? '#fff' : '#007aff'}
+                color="#fff"
               />
               <Waveform isPlaying={playingMessageId === item.id} seed={item.id} />
-              <Text style={[styles.voiceDuration, isMe && styles.myMessageText]}>
+              <Text style={styles.voiceDuration}>
                 {durations[item.id] ? formatDurationMs(durations[item.id]) : '...'}
               </Text>
             </TouchableOpacity>
           ) : (
-            <Text style={[styles.messageText, isMe && styles.myMessageText]}>
-              {item.content}
-            </Text>
+            <Text style={styles.messageText}>{item.content}</Text>
           )}
 
           <View style={styles.messageFooter}>
-            <Text style={[styles.timestamp, isMe && styles.myTimestamp]}>
-              {formatTime(item.timestamp)}
-            </Text>
+            <Text style={styles.timestamp}>{formatTime(item.timestamp)}</Text>
             {isMe && <View style={styles.statusContainer}>{renderStatus(item.status)}</View>}
           </View>
         </View>
@@ -506,15 +640,17 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
     );
   };
 
-  const remainingChars = MAX_MESSAGE_LENGTH - inputText.length;
-  const isOverLimit = inputText.length > MAX_MESSAGE_LENGTH;
-  const counterColor = isOverLimit ? '#ff3b30' : remainingChars < 20 ? '#ff9500' : '#8e8e93';
+  const clampedLength = Math.min(inputText.length, MAX_MESSAGE_LENGTH);
+  const progressPercent = Math.min((clampedLength / MAX_MESSAGE_LENGTH) * 100, 100);
+  const remainingChars = MAX_MESSAGE_LENGTH - clampedLength;
+  const counterColor = remainingChars < 20 ? '#ff9500' : '#8e8e93';
 
   const renderHeader = () => (
     <View style={styles.header}>
       <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerButton}>
         <Ionicons name="chevron-back" size={28} color="#007aff" />
       </TouchableOpacity>
+
       <View style={styles.headerCenter}>
         <Text style={styles.nodeTitle}>{nodeName}</Text>
         {!isBroadcast && (
@@ -526,6 +662,7 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
           </View>
         )}
       </View>
+
       <View style={styles.headerButton} />
     </View>
   );
@@ -576,6 +713,11 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
           showsVerticalScrollIndicator={false}
           refreshing={refreshing}
           onRefresh={() => fetchMessages(true)}
+          onContentSizeChange={() => {
+            setTimeout(() => {
+              scrollToBottom(false);
+            }, 100);
+          }}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Ionicons name="chatbubbles-outline" size={48} color="#ccc" />
@@ -583,7 +725,7 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
               <Text style={styles.emptySubText}>
                 {isBroadcast
                   ? 'Broadcast messages will appear here'
-                  : 'Hold the mic button to send a voice clip'}
+                  : 'Tap the mic button to record a voice clip'}
               </Text>
             </View>
           }
@@ -597,24 +739,27 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
                 <Text style={styles.recordingText}>
                   Recording... {formatDurationSec(recordingSeconds)}
                 </Text>
+                <Text style={styles.autoStopWarning}>
+                  Auto-stop in {Math.max(0, MAX_VOICE_SECONDS - recordingSeconds)}s
+                </Text>
               </View>
             )}
 
             <View style={styles.inputBar}>
-              {/* Broadcast button */}
               <TouchableOpacity
                 style={[
                   styles.broadcastButton,
-                  (!inputText.trim() || isOverLimit || isRecording || sendingVoice) && styles.broadcastButtonDisabled,
+                  (!inputText.trim() || inputText.length > MAX_MESSAGE_LENGTH || isRecording || sendingVoice) &&
+                    styles.broadcastButtonDisabled,
                 ]}
                 onPress={handleBroadcast}
-                disabled={sending || !inputText.trim() || isOverLimit || isRecording || sendingVoice}
+                disabled={sending || !inputText.trim() || inputText.length > MAX_MESSAGE_LENGTH || isRecording || sendingVoice}
               >
                 <Ionicons
                   name="megaphone-outline"
                   size={20}
                   color={
-                    (!inputText.trim() || isOverLimit || isRecording || sendingVoice)
+                    (!inputText.trim() || inputText.length > MAX_MESSAGE_LENGTH || isRecording || sendingVoice)
                       ? '#b0b0b0'
                       : '#007aff'
                   }
@@ -626,19 +771,14 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
                   styles.micButton,
                   (isRecording || sendingVoice) && styles.micButtonRecording,
                 ]}
-                onPressIn={handleMicPressIn}
-                onPressOut={handleMicPressOut}
+                onPress={handleMicTap}
                 disabled={sending || sendingVoice}
                 activeOpacity={0.8}
               >
                 {sendingVoice ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Ionicons
-                    name={isRecording ? 'stop' : 'mic'}
-                    size={20}
-                    color="#fff"
-                  />
+                  <Ionicons name={isRecording ? 'stop' : 'mic'} size={20} color="#fff" />
                 )}
               </TouchableOpacity>
 
@@ -647,21 +787,24 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
                 style={styles.input}
                 placeholderTextColor="#8e8e93"
                 value={inputText}
-                onChangeText={setInputText}
+                onChangeText={(text) => {
+                  const limited = text.slice(0, MAX_MESSAGE_LENGTH);
+                  setInputText(limited);
+                }}
                 onSubmitEditing={handleSend}
                 editable={!sending && !isRecording && !sendingVoice}
-                maxLength={MAX_MESSAGE_LENGTH * 2}
+                maxLength={MAX_MESSAGE_LENGTH}
                 multiline
               />
 
               <TouchableOpacity
                 style={[
                   styles.sendButton,
-                  (sending || !inputText.trim() || isOverLimit || isRecording || sendingVoice) &&
+                  (sending || !inputText.trim() || inputText.length > MAX_MESSAGE_LENGTH || isRecording || sendingVoice) &&
                     styles.sendButtonDisabled,
                 ]}
                 onPress={handleSend}
-                disabled={sending || !inputText.trim() || isOverLimit || isRecording || sendingVoice}
+                disabled={sending || !inputText.trim() || inputText.length > MAX_MESSAGE_LENGTH || isRecording || sendingVoice}
               >
                 {sending ? (
                   <ActivityIndicator size="small" color="#fff" />
@@ -678,20 +821,66 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
                     style={[
                       styles.progressFill,
                       {
-                        width: `${(inputText.length / MAX_MESSAGE_LENGTH) * 100}%`,
-                        backgroundColor: counterColor,
+                        width: `${progressPercent}%`,
+                        backgroundColor: remainingChars < 20 ? '#ff9500' : '#e53935',
                       },
                     ]}
                   />
                 </View>
                 <Text style={[styles.counterText, { color: counterColor }]}>
-                  {inputText.length}/{MAX_MESSAGE_LENGTH}
+                  {clampedLength}/{MAX_MESSAGE_LENGTH}
                 </Text>
               </View>
             )}
           </View>
         )}
       </KeyboardAvoidingView>
+
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={modalVisible}
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <Text style={styles.modalTitle}>{modalTitle}</Text>
+            <Text style={styles.modalMessage}>{modalMessage}</Text>
+            <View style={styles.modalButtons}>
+              {modalCancelText && (
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.modalCancelButton]}
+                  onPress={() => modalOnCancel?.()}
+                >
+                  <Text style={styles.modalButtonText}>{modalCancelText}</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalConfirmButton]}
+                onPress={() => modalOnConfirm?.()}
+              >
+                <Text style={styles.modalButtonText}>{modalConfirmText}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent={true}
+        visible={voiceProgressVisible}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.progressModalContainer}>
+            <ActivityIndicator size="large" color="#007aff" />
+            <Text style={styles.progressModalText}>
+              {progressMessage || 'Sending voice message...'}
+            </Text>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
@@ -756,29 +945,53 @@ const styles = StyleSheet.create({
   alignLeft: {
     alignSelf: 'flex-start',
   },
+  senderNameRow: {
+    marginLeft: 12,
+    marginBottom: 4,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
   senderName: {
     fontSize: 12,
     color: '#8e8e93',
-    marginBottom: 4,
-    marginLeft: 12,
+    fontWeight: '600',
+  },
+  roleTag: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  civilianRoleTag: {
+    color: '#007aff',
+  },
+  rescuerRoleTag: {
+    color: '#ff3624',
+  },
+  unknownRoleTag: {
+    color: '#8e8e93',
+  },
+  sourceNodeTag: {
+    fontSize: 11,
+    color: '#888',
+    marginLeft: 6,
   },
   messageBubble: {
     padding: 12,
     borderRadius: 18,
   },
-  myMessage: {
+  civilianMessage: {
     backgroundColor: '#007aff',
     borderBottomRightRadius: 4,
   },
-  otherMessage: {
-    backgroundColor: '#e5e5ea',
-    borderBottomLeftRadius: 4,
+  rescuerMessage: {
+    backgroundColor: '#ff3624',
+    borderBottomRightRadius: 4,
+  },
+  unknownMessage: {
+    backgroundColor: '#8e8e93',
+    borderBottomRightRadius: 4,
   },
   messageText: {
     fontSize: 16,
-    color: '#000',
-  },
-  myMessageText: {
     color: '#fff',
   },
   messageFooter: {
@@ -789,11 +1002,8 @@ const styles = StyleSheet.create({
   },
   timestamp: {
     fontSize: 11,
-    color: '#8e8e93',
-    marginRight: 4,
-  },
-  myTimestamp: {
     color: '#cce4ff',
+    marginRight: 4,
   },
   statusContainer: {
     marginLeft: 2,
@@ -820,6 +1030,11 @@ const styles = StyleSheet.create({
     color: '#d32f2f',
     fontWeight: '600',
     fontSize: 13,
+  },
+  autoStopWarning: {
+    color: '#ff9500',
+    fontSize: 12,
+    marginLeft: 8,
   },
   inputBar: {
     flexDirection: 'row',
@@ -889,6 +1104,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#e5e5ea',
     borderRadius: 2,
     marginRight: 8,
+    overflow: 'hidden',
   },
   progressFill: {
     height: 3,
@@ -897,6 +1113,8 @@ const styles = StyleSheet.create({
   counterText: {
     fontSize: 12,
     fontWeight: '500',
+    minWidth: 48,
+    textAlign: 'right',
   },
   center: {
     flex: 1,
@@ -951,21 +1169,67 @@ const styles = StyleSheet.create({
   },
   voiceDuration: {
     fontSize: 12,
-    color: '#666',
+    color: '#fff',
   },
-  // Keep old styles if needed, but we replaced the voice row
-  voiceTextBlock: {
-    flexDirection: 'column',
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  voiceTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#000',
+  modalContainer: {
+    width: '80%',
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 20,
+    alignItems: 'center',
   },
-  voiceSubtitle: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 2,
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 12,
+  },
+  modalMessage: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  modalButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 10,
+    marginHorizontal: 8,
+    minWidth: 100,
+    alignItems: 'center',
+  },
+  modalConfirmButton: {
+    backgroundColor: '#007aff',
+  },
+  modalCancelButton: {
+    backgroundColor: '#ccc',
+  },
+  modalButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 16,
+  },
+  progressModalContainer: {
+    width: '70%',
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+  },
+  progressModalText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#333',
+    textAlign: 'center',
   },
 });
 

@@ -8,7 +8,9 @@ import {
   SafeAreaView,
   ScrollView,
   ActivityIndicator,
-  Alert,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../../navigations/appNavigations';
@@ -26,6 +28,8 @@ interface Props {
   navigation: CivilianRegisterNavigationProp;
 }
 
+type ModalType = 'success' | 'error' | 'info';
+
 const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
   const [firstName, setFirstName] = useState('');
   const [middleName, setMiddleName] = useState('');
@@ -40,6 +44,32 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [generalError, setGeneralError] = useState('');
+
+  const [modalVisible, setModalVisible] = useState(false);
+  const [modalTitle, setModalTitle] = useState('');
+  const [modalMessage, setModalMessage] = useState('');
+  const [modalType, setModalType] = useState<ModalType>('info');
+  const [modalAction, setModalAction] = useState<(() => void) | null>(null);
+
+  const showModal = (
+    title: string,
+    message: string,
+    type: ModalType = 'info',
+    onConfirm?: () => void
+  ) => {
+    setModalTitle(title);
+    setModalMessage(message);
+    setModalType(type);
+    setModalAction(() => onConfirm ?? null);
+    setModalVisible(true);
+  };
+
+  const closeModal = () => {
+    setModalVisible(false);
+    const action = modalAction;
+    setModalAction(null);
+    action?.();
+  };
 
   const validateForm = () => {
     const newErrors: { [key: string]: string } = {};
@@ -67,6 +97,7 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
     const validationErrors = validateForm();
     if (Object.keys(validationErrors).length > 0) {
       setErrors(validationErrors);
+      showModal('Validation Error', 'Please fix the highlighted fields and try again.', 'error');
       return;
     }
 
@@ -83,18 +114,20 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
         bloodType,
         password,
       });
-      
-      Alert.alert(
+
+      showModal(
         'Registration Successful',
         'Your account has been created. Please log in.',
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
+        'success',
+        () => {
+          navigation.goBack();
+        }
       );
     } catch (error: any) {
-      if (error.response?.data?.error) {
-        setGeneralError(error.response.data.error);
-      } else {
-        setGeneralError('Registration failed. Please try again.');
-      }
+      const message =
+        error.response?.data?.error || 'Registration failed. Please try again.';
+      setGeneralError(message);
+      showModal('Registration Failed', message, 'error');
     } finally {
       setLoading(false);
     }
@@ -103,233 +136,268 @@ const CivilianRegisterScreen: React.FC<Props> = ({ navigation }) => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <LoadingOverlay visible={loading} />
-      <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Create Account</Text>
-        <Text style={styles.subtitle}>Civilian Registration</Text>
-
-        {generalError !== '' && (
-          <View style={styles.errorBanner}>
-            <Ionicons name="alert-circle-outline" size={18} color="#d32f2f" />
-            <Text style={styles.errorText}>{generalError}</Text>
-          </View>
-        )}
-
-        {/* First Name */}
-        <View style={[styles.inputContainer, errors.firstName && styles.inputError]}>
-          <Ionicons name="person-outline" size={20} color="#777" />
-          <TextInput
-            style={styles.input}
-            placeholder="First Name *"
-            placeholderTextColor="#666"
-            value={firstName}
-            onChangeText={(text) => {
-              setFirstName(text);
-              setErrors((prev) => ({ ...prev, firstName: '' }));
-            }}
-            editable={!loading}
-          />
-        </View>
-        {errors.firstName && <Text style={styles.fieldError}>{errors.firstName}</Text>}
-
-        {/* Middle Name */}
-        <View style={styles.inputContainer}>
-          <Ionicons name="person-outline" size={20} color="#777" />
-          <TextInput
-            style={styles.input}
-            placeholder="Middle Name"
-            placeholderTextColor="#666"
-            value={middleName}
-            onChangeText={setMiddleName}
-            editable={!loading}
-          />
-        </View>
-
-        {/* Last Name */}
-        <View style={[styles.inputContainer, errors.lastName && styles.inputError]}>
-          <Ionicons name="person-outline" size={20} color="#777" />
-          <TextInput
-            style={styles.input}
-            placeholder="Last Name *"
-            placeholderTextColor="#666"
-            value={lastName}
-            onChangeText={(text) => {
-              setLastName(text);
-              setErrors((prev) => ({ ...prev, lastName: '' }));
-            }}
-            editable={!loading}
-          />
-        </View>
-        {errors.lastName && <Text style={styles.fieldError}>{errors.lastName}</Text>}
-
-        {/* Age */}
-        <View style={[styles.inputContainer, errors.age && styles.inputError]}>
-          <Ionicons name="calendar-outline" size={20} color="#777" />
-          <TextInput
-            style={styles.input}
-            placeholder="Age *"
-            placeholderTextColor="#666"
-            keyboardType="numeric"
-            value={age}
-            onChangeText={(text) => {
-              setAge(text);
-              setErrors((prev) => ({ ...prev, age: '' }));
-            }}
-            editable={!loading}
-          />
-        </View>
-        {errors.age && <Text style={styles.fieldError}>{errors.age}</Text>}
-
-        {/* Address */}
-        <View style={[styles.inputContainer, errors.address && styles.inputError]}>
-          <Ionicons name="location-outline" size={20} color="#777" />
-          <TextInput
-            style={styles.input}
-            placeholder="Address *"
-            placeholderTextColor="#666"
-            value={address}
-            onChangeText={(text) => {
-              setAddress(text);
-              setErrors((prev) => ({ ...prev, address: '' }));
-            }}
-            editable={!loading}
-            multiline
-          />
-        </View>
-        {errors.address && <Text style={styles.fieldError}>{errors.address}</Text>}
-
-        {/* Phone Number */}
-        <View style={[styles.inputContainer, errors.phone && styles.inputError]}>
-          <Ionicons name="call-outline" size={20} color="#777" />
-          <TextInput
-            style={styles.input}
-            placeholder="Phone Number *"
-            placeholderTextColor="#666"
-            keyboardType="phone-pad"
-            value={phone}
-            onChangeText={(text) => {
-              setPhone(text);
-              setErrors((prev) => ({ ...prev, phone: '' }));
-            }}
-            editable={!loading}
-          />
-        </View>
-        {errors.phone && <Text style={styles.fieldError}>{errors.phone}</Text>}
-
-        {/* Occupation */}
-        <View style={styles.inputContainer}>
-          <Ionicons name="briefcase-outline" size={20} color="#777" />
-          <TextInput
-            style={styles.input}
-            placeholder="Occupation"
-            placeholderTextColor="#666"
-            value={occupation}
-            onChangeText={setOccupation}
-            editable={!loading}
-          />
-        </View>
-
-        {/* Blood Type Dropdown */}
-        <View style={styles.pickerContainer}>
-          <Ionicons name="water-outline" size={20} color="#777" />
-          <Picker
-            selectedValue={bloodType}
-            onValueChange={(itemValue) => setBloodType(itemValue)}
-            style={styles.picker}
-            enabled={!loading}
-          >
-            <Picker.Item label="Select Blood Type" value="" />
-            <Picker.Item label="A+" value="A+" />
-            <Picker.Item label="A-" value="A-" />
-            <Picker.Item label="B+" value="B+" />
-            <Picker.Item label="B-" value="B-" />
-            <Picker.Item label="AB+" value="AB+" />
-            <Picker.Item label="AB-" value="AB-" />
-            <Picker.Item label="O+" value="O+" />
-            <Picker.Item label="O-" value="O-" />
-          </Picker>
-        </View>
-
-        {/* Password */}
-        <View style={[styles.inputContainer, errors.password && styles.inputError]}>
-          <Ionicons name="lock-closed-outline" size={20} color="#777" />
-          <TextInput
-            style={styles.input}
-            placeholder="Password *"
-            placeholderTextColor="#666"
-            secureTextEntry
-            value={password}
-            onChangeText={(text) => {
-              setPassword(text);
-              setErrors((prev) => ({ ...prev, password: '' }));
-            }}
-            editable={!loading}
-          />
-        </View>
-        {errors.password && <Text style={styles.fieldError}>{errors.password}</Text>}
-
-        {/* Confirm Password */}
-        <View style={[styles.inputContainer, errors.confirmPassword && styles.inputError]}>
-          <Ionicons name="lock-closed-outline" size={20} color="#777" />
-          <TextInput
-            style={styles.input}
-            placeholder="Confirm Password *"
-            placeholderTextColor="#666"
-            secureTextEntry
-            value={confirmPassword}
-            onChangeText={(text) => {
-              setConfirmPassword(text);
-              setErrors((prev) => ({ ...prev, confirmPassword: '' }));
-            }}
-            editable={!loading}
-          />
-        </View>
-        {errors.confirmPassword && <Text style={styles.fieldError}>{errors.confirmPassword}</Text>}
-
-        {/* Register Button */}
-        <TouchableOpacity
-          style={[styles.registerButton, loading && styles.disabledButton]}
-          onPress={handleRegister}
-          disabled={loading}
+      <KeyboardAvoidingView
+        style={styles.keyboardAvoid}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 24}
+      >
+        <ScrollView
+          contentContainerStyle={styles.container}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.registerText}>Register</Text>
-          )}
-        </TouchableOpacity>
+          <Text style={styles.title}>Create Account</Text>
+          <Text style={styles.subtitle}>Civilian Registration</Text>
 
-        {/* Back to Login */}
-        <TouchableOpacity onPress={() => navigation.goBack()} disabled={loading}>
-          <Text style={styles.loginLink}>
-            Already have an account? <Text style={styles.loginText}>Login</Text>
-          </Text>
-        </TouchableOpacity>
-      </ScrollView>
+          {/* First Name */}
+          <View style={[styles.inputContainer, errors.firstName && styles.inputError]}>
+            <Ionicons name="person-outline" size={20} color="#777" />
+            <TextInput
+              style={styles.input}
+              placeholder="First Name *"
+              placeholderTextColor="#666"
+              value={firstName}
+              onChangeText={(text) => {
+                setFirstName(text);
+                setErrors((prev) => ({ ...prev, firstName: '' }));
+              }}
+              editable={!loading}
+            />
+          </View>
+          {errors.firstName && <Text style={styles.fieldError}>{errors.firstName}</Text>}
+
+          {/* Middle Name */}
+          <View style={styles.inputContainer}>
+            <Ionicons name="person-outline" size={20} color="#777" />
+            <TextInput
+              style={styles.input}
+              placeholder="Middle Name"
+              placeholderTextColor="#666"
+              value={middleName}
+              onChangeText={setMiddleName}
+              editable={!loading}
+            />
+          </View>
+
+          {/* Last Name */}
+          <View style={[styles.inputContainer, errors.lastName && styles.inputError]}>
+            <Ionicons name="person-outline" size={20} color="#777" />
+            <TextInput
+              style={styles.input}
+              placeholder="Last Name *"
+              placeholderTextColor="#666"
+              value={lastName}
+              onChangeText={(text) => {
+                setLastName(text);
+                setErrors((prev) => ({ ...prev, lastName: '' }));
+              }}
+              editable={!loading}
+            />
+          </View>
+          {errors.lastName && <Text style={styles.fieldError}>{errors.lastName}</Text>}
+
+          {/* Age */}
+          <View style={[styles.inputContainer, errors.age && styles.inputError]}>
+            <Ionicons name="calendar-outline" size={20} color="#777" />
+            <TextInput
+              style={styles.input}
+              placeholder="Age *"
+              placeholderTextColor="#666"
+              keyboardType="numeric"
+              value={age}
+              onChangeText={(text) => {
+                setAge(text);
+                setErrors((prev) => ({ ...prev, age: '' }));
+              }}
+              editable={!loading}
+            />
+          </View>
+          {errors.age && <Text style={styles.fieldError}>{errors.age}</Text>}
+
+          {/* Address */}
+          <View style={[styles.inputContainer, errors.address && styles.inputError]}>
+            <Ionicons name="location-outline" size={20} color="#777" />
+            <TextInput
+              style={styles.input}
+              placeholder="Address *"
+              placeholderTextColor="#666"
+              value={address}
+              onChangeText={(text) => {
+                setAddress(text);
+                setErrors((prev) => ({ ...prev, address: '' }));
+              }}
+              editable={!loading}
+              multiline
+            />
+          </View>
+          {errors.address && <Text style={styles.fieldError}>{errors.address}</Text>}
+
+          {/* Phone Number */}
+          <View style={[styles.inputContainer, errors.phone && styles.inputError]}>
+            <Ionicons name="call-outline" size={20} color="#777" />
+            <TextInput
+              style={styles.input}
+              placeholder="Phone Number *"
+              placeholderTextColor="#666"
+              keyboardType="phone-pad"
+              value={phone}
+              onChangeText={(text) => {
+                setPhone(text);
+                setErrors((prev) => ({ ...prev, phone: '' }));
+              }}
+              editable={!loading}
+            />
+          </View>
+          {errors.phone && <Text style={styles.fieldError}>{errors.phone}</Text>}
+
+          {/* Occupation */}
+          <View style={styles.inputContainer}>
+            <Ionicons name="briefcase-outline" size={20} color="#777" />
+            <TextInput
+              style={styles.input}
+              placeholder="Occupation"
+              placeholderTextColor="#666"
+              value={occupation}
+              onChangeText={setOccupation}
+              editable={!loading}
+            />
+          </View>
+
+          {/* Blood Type Dropdown */}
+          <View style={styles.pickerContainer}>
+            <Ionicons name="water-outline" size={20} color="#777" />
+            <Picker
+              selectedValue={bloodType}
+              onValueChange={(itemValue) => setBloodType(itemValue)}
+              style={styles.picker}
+              enabled={!loading}
+            >
+              <Picker.Item label="Select Blood Type" value="" />
+              <Picker.Item label="A+" value="A+" />
+              <Picker.Item label="A-" value="A-" />
+              <Picker.Item label="B+" value="B+" />
+              <Picker.Item label="B-" value="B-" />
+              <Picker.Item label="AB+" value="AB+" />
+              <Picker.Item label="AB-" value="AB-" />
+              <Picker.Item label="O+" value="O+" />
+              <Picker.Item label="O-" value="O-" />
+            </Picker>
+          </View>
+
+          {/* Password */}
+          <View style={[styles.inputContainer, errors.password && styles.inputError]}>
+            <Ionicons name="lock-closed-outline" size={20} color="#777" />
+            <TextInput
+              style={styles.input}
+              placeholder="Password *"
+              placeholderTextColor="#666"
+              secureTextEntry
+              value={password}
+              onChangeText={(text) => {
+                setPassword(text);
+                setErrors((prev) => ({ ...prev, password: '' }));
+              }}
+              editable={!loading}
+            />
+          </View>
+          {errors.password && <Text style={styles.fieldError}>{errors.password}</Text>}
+
+          {/* Confirm Password */}
+          <View style={[styles.inputContainer, errors.confirmPassword && styles.inputError]}>
+            <Ionicons name="lock-closed-outline" size={20} color="#777" />
+            <TextInput
+              style={styles.input}
+              placeholder="Confirm Password *"
+              placeholderTextColor="#666"
+              secureTextEntry
+              value={confirmPassword}
+              onChangeText={(text) => {
+                setConfirmPassword(text);
+                setErrors((prev) => ({ ...prev, confirmPassword: '' }));
+              }}
+              editable={!loading}
+            />
+          </View>
+          {errors.confirmPassword && (
+            <Text style={styles.fieldError}>{errors.confirmPassword}</Text>
+          )}
+
+          {/* Register Button */}
+          <TouchableOpacity
+            style={[styles.registerButton, loading && styles.disabledButton]}
+            onPress={handleRegister}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.registerText}>Register</Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Back to Login */}
+          <TouchableOpacity onPress={() => navigation.goBack()} disabled={loading}>
+            <Text style={styles.loginLink}>
+              Already have an account? <Text style={styles.loginText}>Login</Text>
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      <Modal
+        visible={modalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeModal}
+      >
+        <View style={styles.modalOverlay}>
+          <View
+            style={[
+              styles.modalCard,
+              modalType === 'success'
+                ? styles.successAccent
+                : modalType === 'error'
+                ? styles.errorAccent
+                : styles.infoAccent,
+            ]}
+          >
+            <Ionicons
+              name={
+                modalType === 'success'
+                  ? 'checkmark-circle'
+                  : modalType === 'error'
+                  ? 'close-circle'
+                  : 'information-circle'
+              }
+              size={52}
+              color={
+                modalType === 'success'
+                  ? '#2e7d32'
+                  : modalType === 'error'
+                  ? '#d32f2f'
+                  : '#1e88e5'
+              }
+            />
+
+            <Text style={styles.modalTitle}>{modalTitle}</Text>
+            <Text style={styles.modalText}>{modalMessage}</Text>
+
+            <TouchableOpacity style={styles.modalPrimaryButton} onPress={closeModal}>
+              <Text style={styles.modalPrimaryButtonText}>OK</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: '#fff' },
-  container: { padding: 24 },
+  keyboardAvoid: { flex: 1 },
+  container: { flexGrow: 1, padding: 24 },
   title: { fontSize: 24, fontWeight: '600', color: '#111', marginBottom: 4 },
   subtitle: { fontSize: 14, color: '#777', marginBottom: 24 },
-  errorBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ffebee',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#ffcdd2',
-  },
-  errorText: {
-    color: '#d32f2f',
-    fontSize: 14,
-    marginLeft: 8,
-    flex: 1,
-  },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -377,6 +445,59 @@ const styles = StyleSheet.create({
   registerText: { color: '#fff', fontSize: 16, fontWeight: '500' },
   loginLink: { textAlign: 'center', fontSize: 14, color: '#777' },
   loginText: { color: '#1e88e5', fontWeight: '500' },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCard: {
+    width: '85%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    paddingVertical: 22,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    marginTop: 10,
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#222',
+    textAlign: 'center',
+  },
+  modalText: {
+    marginTop: 8,
+    fontSize: 14,
+    color: '#444',
+    textAlign: 'center',
+  },
+  modalPrimaryButton: {
+    marginTop: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    backgroundColor: '#1e88e5',
+    borderRadius: 10,
+    minWidth: 100,
+    alignItems: 'center',
+  },
+  modalPrimaryButtonText: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  successAccent: {
+    borderTopWidth: 5,
+    borderTopColor: '#2e7d32',
+  },
+  errorAccent: {
+    borderTopWidth: 5,
+    borderTopColor: '#d32f2f',
+  },
+  infoAccent: {
+    borderTopWidth: 5,
+    borderTopColor: '#1e88e5',
+  },
 });
 
 export default CivilianRegisterScreen;

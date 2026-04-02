@@ -5,7 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Modal,
-  Animated,
+  Image,
   AppState,
   ActivityIndicator,
 } from 'react-native';
@@ -106,19 +106,12 @@ const DistressSignalScreen = () => {
     type: 'info',
   });
 
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const animationRef = useRef<Animated.CompositeAnimation | null>(null);
   const isMounted = useRef(true);
   const cooldownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const openMessageModal = useCallback(
     (title: string, message: string, type: MessageModalType = 'info') => {
-      setMessageModal({
-        visible: true,
-        title,
-        message,
-        type,
-      });
+      setMessageModal({ visible: true, title, message, type });
     },
     []
   );
@@ -133,48 +126,12 @@ const DistressSignalScreen = () => {
 
     return () => {
       isMounted.current = false;
-
       if (cooldownIntervalRef.current) {
         clearInterval(cooldownIntervalRef.current);
         cooldownIntervalRef.current = null;
       }
-
-      animationRef.current?.stop();
-      animationRef.current = null;
     };
   }, []);
-
-  useEffect(() => {
-    if (activeDistress) {
-      animationRef.current?.stop();
-
-      const anim = Animated.loop(
-        Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 0.45,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-        ])
-      );
-
-      animationRef.current = anim;
-      anim.start();
-    } else {
-      animationRef.current?.stop();
-      animationRef.current = null;
-      pulseAnim.setValue(1);
-    }
-
-    return () => {
-      animationRef.current?.stop();
-    };
-  }, [activeDistress, pulseAnim]);
 
   useEffect(() => {
     if (activeDistress) {
@@ -228,10 +185,7 @@ const DistressSignalScreen = () => {
     setLoading(true);
 
     try {
-      const response = await api.post('/api/distress', {
-        reason,
-        nodeId,
-      });
+      const response = await api.post('/api/distress', { reason, nodeId });
 
       if (!isMounted.current) return;
 
@@ -242,11 +196,7 @@ const DistressSignalScreen = () => {
         setActiveDistress(normalized);
         setReason('');
         setCancelCooldown(15);
-        openMessageModal(
-          'Distress Activated',
-          'Your distress signal has been sent.',
-          'success'
-        );
+        openMessageModal('Distress Activated', 'Your distress signal has been sent.', 'success');
       } else {
         openMessageModal('Error', 'Invalid distress data received.', 'error');
       }
@@ -254,22 +204,12 @@ const DistressSignalScreen = () => {
       if (!isMounted.current) return;
 
       if (error?.response?.status === 409) {
-        openMessageModal(
-          'Distress Active',
-          'Another distress signal is already active on this node.',
-          'error'
-        );
+        openMessageModal('Distress Active', 'Another distress signal is already active on this node.', 'error');
       } else {
-        openMessageModal(
-          'Error',
-          error?.response?.data?.error || 'Failed to activate distress.',
-          'error'
-        );
+        openMessageModal('Error', error?.response?.data?.error || 'Failed to activate distress.', 'error');
       }
     } finally {
-      if (isMounted.current) {
-        setLoading(false);
-      }
+      if (isMounted.current) setLoading(false);
     }
   };
 
@@ -292,9 +232,7 @@ const DistressSignalScreen = () => {
         openMessageModal('Error', 'Failed to cancel distress.', 'error');
       }
     } finally {
-      if (isMounted.current) {
-        setCanceling(false);
-      }
+      if (isMounted.current) setCanceling(false);
     }
   };
 
@@ -328,17 +266,18 @@ const DistressSignalScreen = () => {
     return (
       <MainLayout activeTab="distress">
         <View style={[styles.container, styles.activeContainer]}>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              StyleSheet.absoluteFillObject,
-              styles.flashOverlay,
-              { opacity: pulseAnim },
-            ]}
-          />
+
+          {/* GIF background replaces the Animated pulse overlay */}
+          <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
+            <Image
+              source={require('../../assets/pictures/red_glow.gif')}
+              style={StyleSheet.absoluteFillObject}
+              resizeMode="cover"
+            />
+          </View>
 
           <View style={styles.activeCard}>
-            <Ionicons name="warning" size={64} color="#8b0000" />
+            <Ionicons name="warning" size={64} color="#ffffff" />
 
             <Text style={styles.activeTitle}>DISTRESS ACTIVE</Text>
 
@@ -380,9 +319,7 @@ const DistressSignalScreen = () => {
                 </>
               )}
 
-            <Text style={styles.note}>
-              Rescuers have been notified. Stay calm.
-            </Text>
+            <Text style={styles.note}>Rescuers have been notified. Stay calm.</Text>
           </View>
 
           <Modal visible={loading} transparent animationType="fade">
@@ -434,9 +371,7 @@ const DistressSignalScreen = () => {
             visible={messageModal.visible}
             transparent
             animationType="fade"
-            onRequestClose={() =>
-              setMessageModal((prev) => ({ ...prev, visible: false }))
-            }
+            onRequestClose={() => setMessageModal((prev) => ({ ...prev, visible: false }))}
           >
             <View style={styles.modalOverlay}>
               <View style={[styles.modalCard, modalAccentStyle]}>
@@ -447,9 +382,7 @@ const DistressSignalScreen = () => {
                 <View style={styles.singleModalAction}>
                   <TouchableOpacity
                     style={styles.modalPrimaryButton}
-                    onPress={() =>
-                      setMessageModal((prev) => ({ ...prev, visible: false }))
-                    }
+                    onPress={() => setMessageModal((prev) => ({ ...prev, visible: false }))}
                   >
                     <Text style={styles.modalPrimaryButtonText}>OK</Text>
                   </TouchableOpacity>
@@ -480,8 +413,7 @@ const DistressSignalScreen = () => {
           <View style={styles.infoBox}>
             <Ionicons name="information-circle-outline" size={18} color="#1e88e5" />
             <Text style={styles.infoText}>
-              This will alert nearby devices and responders connected to the mesh
-              network.
+              This will alert nearby devices and responders connected to the mesh network.
             </Text>
           </View>
 
@@ -590,9 +522,7 @@ const DistressSignalScreen = () => {
           visible={messageModal.visible}
           transparent
           animationType="fade"
-          onRequestClose={() =>
-            setMessageModal((prev) => ({ ...prev, visible: false }))
-          }
+          onRequestClose={() => setMessageModal((prev) => ({ ...prev, visible: false }))}
         >
           <View style={styles.modalOverlay}>
             <View style={[styles.modalCard, modalAccentStyle]}>
@@ -603,9 +533,7 @@ const DistressSignalScreen = () => {
               <View style={styles.singleModalAction}>
                 <TouchableOpacity
                   style={styles.modalPrimaryButton}
-                  onPress={() =>
-                    setMessageModal((prev) => ({ ...prev, visible: false }))
-                  }
+                  onPress={() => setMessageModal((prev) => ({ ...prev, visible: false }))}
                 >
                   <Text style={styles.modalPrimaryButtonText}>OK</Text>
                 </TouchableOpacity>
@@ -627,10 +555,6 @@ const styles = StyleSheet.create({
 
   activeContainer: {
     backgroundColor: '#ffcccc',
-  },
-
-  flashOverlay: {
-    backgroundColor: '#ff5555',
   },
 
   card: {
@@ -755,14 +679,14 @@ const styles = StyleSheet.create({
   activeTitle: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: '#8b0000',
+    color: '#ffffff',
     marginTop: 12,
     textAlign: 'center',
   },
 
   activeReason: {
     fontSize: 20,
-    color: '#8b0000',
+    color: '#ffffff',
     marginVertical: 10,
     textAlign: 'center',
     flexWrap: 'wrap',
@@ -771,7 +695,7 @@ const styles = StyleSheet.create({
 
   activeTime: {
     fontSize: 14,
-    color: '#8b0000',
+    color: '#ffffff',
     marginBottom: 30,
     textAlign: 'center',
   },
@@ -796,14 +720,14 @@ const styles = StyleSheet.create({
 
   note: {
     marginTop: 20,
-    color: '#8b0000',
+    color: '#ffffff',
     textAlign: 'center',
   },
 
   cooldownNote: {
     marginTop: 8,
     fontSize: 12,
-    color: '#8b0000',
+    color: '#ffffff',
     textAlign: 'center',
     paddingHorizontal: 20,
     fontStyle: 'italic',

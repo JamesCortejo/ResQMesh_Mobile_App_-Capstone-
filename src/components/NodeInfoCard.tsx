@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { MeshNode, DistressDetail } from '../types/MeshNode';
+import { NODE_INACTIVE_TIMEOUT_MS } from '../constants/timeouts';
 
 interface NodeInfoCardProps {
   node: MeshNode;
@@ -16,6 +17,131 @@ interface NodeInfoCardProps {
   onClose: () => void;
 }
 
+const toMs = (value: unknown): number => {
+  if (typeof value === 'number') {
+    return value < 1e12 ? value * 1000 : value;
+  }
+  if (typeof value === 'string') {
+    const asNumber = Number(value);
+    if (!Number.isNaN(asNumber) && Number.isFinite(asNumber)) {
+      return asNumber < 1e12 ? asNumber * 1000 : asNumber;
+    }
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? NaN : parsed;
+  }
+  return NaN;
+};
+
+const getRawSignal = (node: MeshNode): number | null => {
+  const raw = node.signal;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+  if (typeof raw === 'string') {
+    const parsed = Number(raw);
+    if (!Number.isNaN(parsed) && Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+};
+
+const getSignalLevel = (node: MeshNode, connectedNodeId?: string | null): number => {
+  if (node.id === connectedNodeId) return 4;
+
+  const rawSignal = getRawSignal(node);
+  if (rawSignal !== null) {
+    if (rawSignal >= -70) return 4;
+    if (rawSignal >= -85) return 3;
+    if (rawSignal >= -100) return 2;
+    return 1;
+  }
+
+  if (!node.lastSeen) return 0;
+  const lastSeenMs = toMs(node.lastSeen);
+  if (Number.isNaN(lastSeenMs)) return 0;
+
+  const ageMs = Date.now() - lastSeenMs;
+  if (ageMs > NODE_INACTIVE_TIMEOUT_MS) return 0;
+
+  let freshness = 1;
+  if (ageMs > 20000) freshness = 0.4;
+  else if (ageMs > 10000) freshness = 0.7;
+
+  let distanceScore = 1;
+  if (node.distanceMeters !== null && node.distanceMeters !== undefined) {
+    if (node.distanceMeters > 2000) distanceScore = 0.2;
+    else if (node.distanceMeters > 1000) distanceScore = 0.5;
+    else if (node.distanceMeters > 300) distanceScore = 0.8;
+  }
+
+  const score = freshness * distanceScore;
+  if (score > 0.8) return 4;
+  if (score > 0.6) return 3;
+  if (score > 0.3) return 2;
+  return 1;
+};
+
+const getSignalColor = (level: number) => {
+  switch (level) {
+    case 4: return '#2ecc71';
+    case 3: return '#f1c40f';
+    case 2: return '#e67e22';
+    case 1: return '#e74c3c';
+    default: return '#999';
+  }
+};
+
+const getSignalLabel = (level: number) => {
+  switch (level) {
+    case 4: return 'Excellent';
+    case 3: return 'Good';
+    case 2: return 'Weak';
+    case 1: return 'Poor';
+    default: return 'No Signal';
+  }
+};
+
+interface SignalIndicatorProps {
+  node: MeshNode;
+  color: string;
+}
+
+const SignalIndicator = ({ node, color }: SignalIndicatorProps) => {
+  const level = getSignalLevel(node);
+  const signalColor = getSignalColor(level);
+  const label = getSignalLabel(level);
+  const rawSignal = getRawSignal(node);
+
+  return (
+    <View style={styles.row}>
+      <Ionicons name="wifi-outline" size={16} color={color} />
+      <View style={styles.signalContent}>
+        {/* Signal label + circles on the same line, tightly grouped */}
+        <View style={styles.signalRow}>
+          <Text style={styles.infoText}>Signal: </Text>
+          <Text style={[styles.signalLabel, { color: signalColor }]}>{label}</Text>
+          <View style={styles.circleRow}>
+            {[0, 1, 2, 3].map((i) => (
+              <View
+                key={i}
+                style={[
+                  styles.signalCircle,
+                  { backgroundColor: i < level ? signalColor : '#ddd' },
+                ]}
+              />
+            ))}
+          </View>
+        </View>
+        {rawSignal !== null ? (
+          <Text style={styles.rssiText}>{rawSignal} dBm</Text>
+        ) : (
+          <Text style={styles.rssiText}>RSSI unavailable (transparent mode)</Text>
+        )}
+      </View>
+    </View>
+  );
+};
+
+// ----------------------------------------------------------------------------
+// Main component
+// ----------------------------------------------------------------------------
 const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
   node,
   distressDetails,
@@ -177,6 +303,7 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
       );
     }
 
+    // Normal active node
     return (
       <>
         <View style={styles.row}>
@@ -184,12 +311,7 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
           <Text style={styles.infoText}>Users connected: {node.users ?? 0}</Text>
         </View>
 
-        <View style={styles.row}>
-          <Ionicons name="wifi-outline" size={16} color={iconColor} />
-          <Text style={styles.infoText}>
-            Signal strength: {node.signal ?? 'N/A'}
-          </Text>
-        </View>
+        <SignalIndicator node={node} color={iconColor} />
 
         <View style={styles.row}>
           <Ionicons name="location-outline" size={16} color={iconColor} />
@@ -259,14 +381,41 @@ const styles = StyleSheet.create({
   },
   row: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 10,
     marginBottom: 8,
   },
   infoText: {
     fontSize: 14,
     color: '#333',
+  },
+  signalContent: {
     flex: 1,
+    gap: 2,
+  },
+  signalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  signalLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  circleRow: {
+    flexDirection: 'row',
+    gap: 4,
+    alignItems: 'center',
+  },
+  signalCircle: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  rssiText: {
+    fontSize: 11,
+    color: '#999',
+    marginTop: 1,
   },
   distressHeader: {
     marginBottom: 10,
