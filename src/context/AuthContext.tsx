@@ -1,45 +1,117 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import bcrypt from 'bcryptjs';
 import api from '../services/api';
+import cloudApi from '../services/cloudApi';
+
+type AuthRole = 'civilian' | 'rescuer';
+
+interface SignInCredentials {
+  phone?: string;
+  code?: string;
+  password: string;
+  nodeId?: string;
+}
+
+interface AuthUser {
+  id?: number;
+  code?: string;
+  firstName?: string;
+  middleName?: string | null;
+  lastName?: string;
+  age?: number | null;
+  occupation?: string | null;
+  bloodType?: string | null;
+  address?: string | null;
+  role?: string;
+  teamId?: number | null;
+  teamName?: string | null;
+  phone?: string | null;
+  phoneHash?: string | null;
+  passwordHash?: string | null;
+  [key: string]: any;
+}
 
 interface AuthContextData {
-  user: any | null;
+  user: AuthUser | null;
   loading: boolean;
   nodeId: string | null;
   signIn(
-    credentials: { phone: string; password: string; nodeId?: string },
-    role: 'civilian' | 'rescuer',
+    credentials: SignInCredentials,
+    role: AuthRole,
     remember?: boolean
   ): Promise<void>;
-  signOut(): void;
+  signOut(): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextData>({} as AuthContextData);
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<any | null>(null);
+const STORAGE_KEYS = {
+  token: 'accessToken',
+  user: 'user',
+  nodeId: 'nodeId',
+  passwordHash: 'password_hash',
+};
+
+const normalizeUser = (user: any): AuthUser => {
+  if (!user || typeof user !== 'object') return {};
+
+  return {
+    ...user,
+    id: user.id ?? user.user_id ?? undefined,
+    code: user.code ?? user.user_code ?? undefined,
+    firstName: user.firstName ?? user.first_name ?? undefined,
+    middleName: user.middleName ?? user.middle_name ?? null,
+    lastName: user.lastName ?? user.last_name ?? undefined,
+    age: user.age ?? null,
+    occupation: user.occupation ?? null,
+    bloodType: user.bloodType ?? user.blood_type ?? null,
+    address: user.address ?? user.address_encrypted ?? null,
+    role: user.role ?? 'civilian',
+    teamId: user.teamId ?? user.team_id ?? null,
+    teamName: user.teamName ?? user.team_name ?? null,
+    phone: user.phone ?? user.phone_encrypted ?? null,
+    phoneHash: user.phoneHash ?? user.phone_hash ?? null,
+    passwordHash: user.passwordHash ?? user.password_hash ?? null,
+  };
+};
+
+const getPasswordHash = (user: any): string => {
+  return (
+    user?.passwordHash ??
+    user?.password_hash ??
+    user?.password?.hash ??
+    ''
+  );
+};
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [nodeId, setNodeId] = useState<string | null>(null);
 
   useEffect(() => {
     const loadStorageData = async () => {
-      console.log('🔍 AuthContext: loading storage data...');
       try {
-        const storedUser = await AsyncStorage.getItem('user');
-        const storedToken = await AsyncStorage.getItem('accessToken');
-        const storedNodeId = await AsyncStorage.getItem('nodeId');
-        console.log('🔍 storedUser:', storedUser);
-        console.log('🔍 storedToken:', storedToken ? '***present***' : 'null');
-        console.log('🔍 storedNodeId:', storedNodeId);
+        const [storedUser, storedToken, storedNodeId] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEYS.user),
+          AsyncStorage.getItem(STORAGE_KEYS.token),
+          AsyncStorage.getItem(STORAGE_KEYS.nodeId),
+        ]);
 
-        if (storedUser && storedToken) {
-          const parsedUser = JSON.parse(storedUser);
-          setUser(parsedUser);
+        if (storedUser) {
+          setUser(normalizeUser(JSON.parse(storedUser)));
+        }
+
+        if (storedToken) {
+          api.defaults.headers.common.Authorization = `Bearer ${storedToken}`;
+          cloudApi.defaults.headers.common.Authorization = `Bearer ${storedToken}`;
+        }
+
+        if (storedNodeId) {
           setNodeId(storedNodeId);
-          api.defaults.headers.Authorization = `Bearer ${storedToken}`;
-          console.log('✅ AuthContext: user restored from storage', parsedUser);
-        } else {
-          console.log('ℹ️ AuthContext: no stored credentials');
         }
       } catch (error) {
         console.error('❌ AuthContext: error loading storage', error);
@@ -47,60 +119,190 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setLoading(false);
       }
     };
+
     loadStorageData();
   }, []);
 
-  const signIn = async (
-    credentials: { phone: string; password: string; nodeId?: string },
-    role: 'civilian' | 'rescuer',
-    remember: boolean = true
+  const saveSession = async (
+    accessToken: string,
+    userData: any,
+    remember: boolean,
+    currentNodeId?: string
   ) => {
-    const endpoint = role === 'civilian' ? '/auth/civilian/login' : '/auth/rescuer/login';
-    console.log(`🔑 signIn called with role: ${role}, endpoint: ${endpoint}, remember: ${remember}, nodeId: ${credentials.nodeId}`);
+    const normalizedUser = normalizeUser(userData);
+    const passwordHash = getPasswordHash(userData);
 
-    try {
-      const response = await api.post(endpoint, {
-        phone: credentials.phone,
-        password: credentials.password,
-        nodeId: credentials.nodeId,
-      });
-      const { access_token, user: userData } = response.data;
-      console.log('✅ Login successful, token:', access_token);
+    setUser(normalizedUser);
+    setNodeId(currentNodeId ?? null);
 
-      setUser(userData);
-      if (credentials.nodeId) {
-        setNodeId(credentials.nodeId);
+    api.defaults.headers.common.Authorization = `Bearer ${accessToken}`;
+    cloudApi.defaults.headers.common.Authorization = `Bearer ${accessToken}`;
+
+    if (remember) {
+      const items: [string, string][] = [
+        [STORAGE_KEYS.token, accessToken],
+        [STORAGE_KEYS.user, JSON.stringify(normalizedUser)],
+      ];
+
+      if (currentNodeId) {
+        items.push([STORAGE_KEYS.nodeId, currentNodeId]);
       }
-      api.defaults.headers.Authorization = `Bearer ${access_token}`;
 
-      if (remember) {
-        await AsyncStorage.setItem('accessToken', access_token);
-        await AsyncStorage.setItem('user', JSON.stringify(userData));
-        if (credentials.nodeId) {
-          await AsyncStorage.setItem('nodeId', credentials.nodeId);
-        }
-        console.log('💾 AuthContext: token, user, and nodeId saved to AsyncStorage');
-      } else {
-        await AsyncStorage.removeItem('accessToken');
-        await AsyncStorage.removeItem('user');
-        await AsyncStorage.removeItem('nodeId');
-        console.log('🧹 AuthContext: cleared any existing stored credentials');
+      if (passwordHash) {
+        items.push([STORAGE_KEYS.passwordHash, passwordHash]);
       }
-    } catch (error: any) {
-      console.error('❌ signIn error:', error.response?.data || error.message);
-      throw new Error(error.response?.data?.error || 'Login failed');
+
+      await AsyncStorage.multiSet(items);
+    } else {
+      await AsyncStorage.multiRemove([
+        STORAGE_KEYS.token,
+        STORAGE_KEYS.user,
+        STORAGE_KEYS.nodeId,
+        STORAGE_KEYS.passwordHash,
+      ]);
     }
   };
 
+  const signIn = async (
+    credentials: SignInCredentials,
+    role: AuthRole,
+    remember: boolean = true
+  ) => {
+    const endpoint =
+      role === 'civilian'
+        ? '/auth/civilian/login'
+        : '/auth/rescuer/login';
+
+    const payload =
+      role === 'rescuer'
+        ? {
+            code: credentials.code?.trim() || credentials.phone?.trim() || '',
+            password: credentials.password,
+          }
+        : {
+            phone: credentials.phone?.trim() || '',
+            password: credentials.password,
+            nodeId: credentials.nodeId,
+          };
+
+    // CIVILIAN: mesh only, then offline
+    if (role === 'civilian') {
+      try {
+        const response = await api.post(endpoint, payload);
+        const { access_token, user: userData } = response.data || {};
+
+        if (!access_token || !userData) {
+          throw new Error('Invalid mesh login response');
+        }
+
+        await saveSession(access_token, userData, remember, credentials.nodeId);
+        return;
+      } catch (meshError: any) {
+        console.log(
+          '⚠️ Civilian mesh login failed, trying offline...',
+          meshError?.response?.data || meshError?.message
+        );
+      }
+
+      const storedUser = await AsyncStorage.getItem(STORAGE_KEYS.user);
+      const storedHash =
+        (await AsyncStorage.getItem(STORAGE_KEYS.passwordHash)) || '';
+
+      if (!storedUser || !storedHash) {
+        throw new Error('No offline credentials available');
+      }
+
+      const parsedUser = normalizeUser(JSON.parse(storedUser));
+      const isMatch = await bcrypt.compare(credentials.password, storedHash);
+
+      if (!isMatch) {
+        throw new Error('Wrong password');
+      }
+
+      setUser(parsedUser);
+
+      const storedNodeId = await AsyncStorage.getItem(STORAGE_KEYS.nodeId);
+      setNodeId(storedNodeId ?? null);
+
+      delete api.defaults.headers.common.Authorization;
+      delete cloudApi.defaults.headers.common.Authorization;
+      return;
+    }
+
+    // RESCUER: cloud first
+    try {
+      const response = await cloudApi.post(endpoint, payload);
+      const { access_token, user: userData } = response.data || {};
+
+      if (!access_token || !userData) {
+        throw new Error('Invalid cloud login response');
+      }
+
+      await saveSession(access_token, userData, remember, credentials.nodeId);
+      return;
+    } catch (cloudError: any) {
+      console.log(
+        '⚠️ Cloud login failed, trying mesh...',
+        cloudError?.response?.data || cloudError?.message
+      );
+    }
+
+    // RESCUER: mesh fallback
+    try {
+      const response = await api.post(endpoint, payload);
+      const { access_token, user: userData } = response.data || {};
+
+      if (!access_token || !userData) {
+        throw new Error('Invalid mesh login response');
+      }
+
+      await saveSession(access_token, userData, remember, credentials.nodeId);
+      return;
+    } catch (meshError: any) {
+      console.log(
+        '⚠️ Mesh login failed, trying offline...',
+        meshError?.response?.data || meshError?.message
+      );
+    }
+
+    // RESCUER: offline fallback
+    const storedUser = await AsyncStorage.getItem(STORAGE_KEYS.user);
+    const storedHash =
+      (await AsyncStorage.getItem(STORAGE_KEYS.passwordHash)) || '';
+
+    if (!storedUser || !storedHash) {
+      throw new Error('No offline credentials available');
+    }
+
+    const parsedUser = normalizeUser(JSON.parse(storedUser));
+    const isMatch = await bcrypt.compare(credentials.password, storedHash);
+
+    if (!isMatch) {
+      throw new Error('Wrong password');
+    }
+
+    setUser(parsedUser);
+
+    const storedNodeId = await AsyncStorage.getItem(STORAGE_KEYS.nodeId);
+    setNodeId(storedNodeId ?? null);
+
+    delete api.defaults.headers.common.Authorization;
+    delete cloudApi.defaults.headers.common.Authorization;
+  };
+
   const signOut = async () => {
-    console.log('🚪 signOut called');
-    await AsyncStorage.removeItem('accessToken');
-    await AsyncStorage.removeItem('user');
-    await AsyncStorage.removeItem('nodeId');
+    await AsyncStorage.multiRemove([
+      STORAGE_KEYS.token,
+      STORAGE_KEYS.user,
+      STORAGE_KEYS.nodeId,
+      STORAGE_KEYS.passwordHash,
+    ]);
+
     setUser(null);
     setNodeId(null);
-    delete api.defaults.headers.Authorization;
-    console.log('✅ AuthContext: user signed out, storage cleared');
+
+    delete api.defaults.headers.common.Authorization;
+    delete cloudApi.defaults.headers.common.Authorization;
   };
 
   return (

@@ -1,17 +1,15 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BASE_URL =
-  process.env.EXPO_PUBLIC_MESH_API_URL || 'http://192.168.4.1:5000';
-
-const api = axios.create({
-  baseURL: BASE_URL,
+const cloudApi = axios.create({
+  baseURL: process.env.EXPO_PUBLIC_CLOUD_API_URL,
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 10000,
 });
 
-api.interceptors.request.use(
+cloudApi.interceptors.request.use(
   async (config) => {
     const token = await AsyncStorage.getItem('accessToken');
     if (token) {
@@ -22,7 +20,7 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-api.interceptors.response.use(
+cloudApi.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response?.status === 401) {
@@ -32,4 +30,4 @@ api.interceptors.response.use(
   }
 );
 
-export default api;
+export default cloudApi;

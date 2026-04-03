@@ -31,7 +31,7 @@ interface Props {
 type ModalType = 'success' | 'error' | 'info';
 
 const RescuerLoginScreen: React.FC<Props> = ({ navigation }) => {
-  const [rescuerId, setRescuerId] = useState('');
+  const [rescuerCode, setRescuerCode] = useState('');
   const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -68,24 +68,40 @@ const RescuerLoginScreen: React.FC<Props> = ({ navigation }) => {
   const handleLogin = async () => {
     setError('');
 
-    if (!rescuerId.trim() || !password.trim()) {
+    if (!rescuerCode.trim() || !password.trim()) {
       setError('Please fill in all fields');
       showModal('Missing Fields', 'Please fill in all fields.', 'error');
       return;
     }
 
     setLoading(true);
-    try {
-      const statusRes = await api.get('/api/status', { timeout: 3000 });
-      const nodeId = statusRes.data.node_id;
 
-      await signIn({ phone: rescuerId, password, nodeId }, 'rescuer', remember);
+    try {
+      let nodeId: string | undefined;
+
+      try {
+        const statusRes = await api.get('/api/status', { timeout: 3000 });
+        nodeId = statusRes.data?.node_id ?? undefined;
+      } catch {
+        nodeId = undefined;
+      }
+
+      await signIn(
+        {
+          code: rescuerCode.trim(),
+          password,
+          nodeId,
+        },
+        'rescuer',
+        remember
+      );
 
       showModal('Login Successful', 'Welcome, Rescuer!', 'success', () => {
         navigation.replace('RescuerMainTabs');
       });
     } catch (err: any) {
-      const message = err?.message || 'Login failed. Please check your credentials.';
+      const message =
+        err?.message || 'Login failed. Please check your credentials.';
       setError(message);
       showModal('Login Failed', message, 'error');
     } finally {
@@ -108,15 +124,15 @@ const RescuerLoginScreen: React.FC<Props> = ({ navigation }) => {
           <Text style={styles.title}>Rescuer Login</Text>
           <Text style={styles.subtitle}>Authorized personnel only</Text>
 
-          <View style={[styles.inputContainer, error && !rescuerId && styles.inputError]}>
-            <Ionicons name="id-card-outline" size={20} color="#777" />
+          <View style={[styles.inputContainer, error && !rescuerCode && styles.inputError]}>
+            <Ionicons name="qr-code-outline" size={20} color="#777" />
             <TextInput
               style={styles.input}
-              placeholder="Rescuer ID / Phone"
+              placeholder="Rescuer Code"
               placeholderTextColor="#666"
-              value={rescuerId}
+              value={rescuerCode}
               onChangeText={(text) => {
-                setRescuerId(text);
+                setRescuerCode(text);
                 setError('');
               }}
               autoCapitalize="none"
