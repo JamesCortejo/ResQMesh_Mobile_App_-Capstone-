@@ -10,7 +10,7 @@ import CivilianRegisterScreen from '../Screens/CivilianScreens/civilianRegisterS
 
 // Rescuer
 import RescuerLoginScreen from '../Screens/RescuerScreens/rescuerLoginScreen';
-import RescuerMainTabs from './RescuerMainTabs';
+import RescuerMainTabs from './RescuerMainTabs';   // ✅ default import
 import RescuerSettingsScreen from '../Screens/RescuerScreens/settingsScreen';
 
 // Main tabs (civilian)
@@ -28,7 +28,7 @@ export type RootStackParamList = {
   MainTabs: undefined;
   RescuerMainTabs: undefined;
   RescuerSettings: undefined;
-  MeshNodeChat: { nodeId: string; nodeName: string; users: number }; // ✅ added nodeId
+  MeshNodeChat: { nodeId: string; nodeName: string; users: number };
 };
 
 const Stack = createStackNavigator<RootStackParamList>();

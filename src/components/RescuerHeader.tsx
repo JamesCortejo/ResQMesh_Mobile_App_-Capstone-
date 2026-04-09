@@ -24,7 +24,7 @@ const RescuerHeader = memo(() => {
           source={require('../assets/pictures/logo.png')}
           style={styles.logo}
         />
-        <Text style={styles.title}>Rescuer • Mesh</Text>
+        <Text style={styles.title}>ResQMesh RESCUER</Text>
       </View>
 
       <Ionicons

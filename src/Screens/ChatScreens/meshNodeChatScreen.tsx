@@ -282,35 +282,47 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
         setError(null);
         if (showRefreshing) setRefreshing(true);
         const response = await api.get(`/api/messages/${nodeId}`);
-        setMessages(response.data);
+
+        setMessages((prev) => {
+          // Only update + scroll if there are genuinely new messages
+          if (response.data.length !== prev.length) {
+            setTimeout(() => scrollToBottom(true), 100);
+          }
+          return response.data;
+        });
       } catch (err: any) {
         console.error('Failed to fetch messages', err);
         setError('Could not load messages. Please try again.');
       } finally {
         setLoading(false);
         if (showRefreshing) setRefreshing(false);
-
-        setTimeout(() => {
-          scrollToBottom(false);
-        }, 150);
       }
     },
     [nodeId, scrollToBottom]
   );
 
+  // Initial load
   useEffect(() => {
     fetchMessages();
   }, [fetchMessages]);
 
+  // ✅ Poll every 3 seconds while screen is focused, stop when navigating away
   useFocusEffect(
     useCallback(() => {
       fetchMessages();
 
-      const timer = setTimeout(() => {
+      const scrollTimer = setTimeout(() => {
         scrollToBottom(false);
       }, 200);
 
-      return () => clearTimeout(timer);
+      const pollInterval = setInterval(() => {
+        fetchMessages();
+      }, 3000);
+
+      return () => {
+        clearTimeout(scrollTimer);
+        clearInterval(pollInterval);
+      };
     }, [fetchMessages, scrollToBottom])
   );
 
@@ -326,14 +338,6 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
       markAsRead();
     }, [nodeId])
   );
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      scrollToBottom(false);
-    }, 150);
-
-    return () => clearTimeout(timer);
-  }, [messages, scrollToBottom]);
 
   useEffect(() => {
     if (isBroadcast) return;
@@ -539,7 +543,12 @@ const MeshNodeChatScreen: React.FC<Props> = ({ navigation }) => {
   const formatTime = (timestamp: string) => {
     try {
       const date = new Date(timestamp);
-      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return date.toLocaleTimeString('en-PH', {
+        timeZone: 'Asia/Manila',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true,
+      });
     } catch {
       return '';
     }

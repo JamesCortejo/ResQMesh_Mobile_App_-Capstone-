@@ -68,8 +68,8 @@ const normalizeUser = (user: any): AuthUser => {
     bloodType: user.bloodType ?? user.blood_type ?? null,
     address: user.address ?? user.address_encrypted ?? null,
     role: user.role ?? 'civilian',
-    teamId: user.teamId ?? user.team_id ?? null,
-    teamName: user.teamName ?? user.team_name ?? null,
+    teamId: user.teamId ?? user.team_id ?? user.team?.id ?? null,
+    teamName: user.teamName ?? user.team_name ?? user.team?.name ?? null,
     phone: user.phone ?? user.phone_encrypted ?? null,
     phoneHash: user.phoneHash ?? user.phone_hash ?? null,
     passwordHash: user.passwordHash ?? user.password_hash ?? null,
@@ -77,12 +77,7 @@ const normalizeUser = (user: any): AuthUser => {
 };
 
 const getPasswordHash = (user: any): string => {
-  return (
-    user?.passwordHash ??
-    user?.password_hash ??
-    user?.password?.hash ??
-    ''
-  );
+  return user?.passwordHash ?? user?.password_hash ?? user?.password?.hash ?? '';
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
@@ -101,11 +96,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
           AsyncStorage.getItem(STORAGE_KEYS.nodeId),
         ]);
 
+        console.log('🟣 STORAGE LOAD: user exists =', !!storedUser);
+        console.log('🟣 STORAGE LOAD: token exists =', !!storedToken);
+        console.log('🟣 STORAGE LOAD: nodeId =', storedNodeId);
+
         if (storedUser) {
-          setUser(normalizeUser(JSON.parse(storedUser)));
+          const parsedUser = JSON.parse(storedUser);
+          console.log('🟣 STORAGE LOAD: stored user =', JSON.stringify(parsedUser, null, 2));
+          setUser(normalizeUser(parsedUser));
         }
 
         if (storedToken) {
+          console.log('🟣 STORAGE LOAD: applying token to axios defaults');
           api.defaults.headers.common.Authorization = `Bearer ${storedToken}`;
           cloudApi.defaults.headers.common.Authorization = `Bearer ${storedToken}`;
         }
@@ -132,6 +134,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     const normalizedUser = normalizeUser(userData);
     const passwordHash = getPasswordHash(userData);
 
+    console.log('🔥 LOGIN TOKEN:', accessToken);
+    console.log('🔥 REMEMBER FLAG:', remember);
+    console.log('🟢 NORMALIZED USER:');
+    console.log(JSON.stringify(normalizedUser, null, 2));
+    console.log('🟢 RAW USER DATA:');
+    console.log(JSON.stringify(userData, null, 2));
+    console.log('🟢 TEAM ID:', normalizedUser.teamId);
+    console.log('🟢 TEAM NAME:', normalizedUser.teamName);
+
     setUser(normalizedUser);
     setNodeId(currentNodeId ?? null);
 
@@ -152,8 +163,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         items.push([STORAGE_KEYS.passwordHash, passwordHash]);
       }
 
+      console.log('🔥 SAVING TOKEN TO STORAGE:', accessToken);
+      console.log('🔥 SAVING USER TO STORAGE:', JSON.stringify(normalizedUser, null, 2));
+      console.log('🔥 SAVING NODE ID TO STORAGE:', currentNodeId ?? null);
+
       await AsyncStorage.multiSet(items);
+
+      const checkToken = await AsyncStorage.getItem(STORAGE_KEYS.token);
+      console.log('🔥 TOKEN AFTER SAVE:', checkToken);
     } else {
+      console.log('⚠️ remember=false, clearing stored session data');
       await AsyncStorage.multiRemove([
         STORAGE_KEYS.token,
         STORAGE_KEYS.user,
@@ -178,6 +197,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         ? {
             code: credentials.code?.trim() || credentials.phone?.trim() || '',
             password: credentials.password,
+            nodeId: credentials.nodeId,
           }
         : {
             phone: credentials.phone?.trim() || '',
@@ -185,11 +205,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
             nodeId: credentials.nodeId,
           };
 
-    // CIVILIAN: mesh only, then offline
+    console.log('🟦 SIGN IN START');
+    console.log('🟦 ROLE:', role);
+    console.log('🟦 ENDPOINT:', endpoint);
+    console.log('🟦 PAYLOAD:', JSON.stringify(payload, null, 2));
+
     if (role === 'civilian') {
       try {
         const response = await api.post(endpoint, payload);
+        console.log('🟦 CIVILIAN LOGIN RESPONSE:', JSON.stringify(response.data, null, 2));
+
         const { access_token, user: userData } = response.data || {};
+
+        console.log('🟦 CIVILIAN TOKEN:', access_token);
+        console.log('🟦 CIVILIAN USER:', JSON.stringify(userData, null, 2));
 
         if (!access_token || !userData) {
           throw new Error('Invalid mesh login response');
@@ -205,8 +234,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       }
 
       const storedUser = await AsyncStorage.getItem(STORAGE_KEYS.user);
-      const storedHash =
-        (await AsyncStorage.getItem(STORAGE_KEYS.passwordHash)) || '';
+      const storedHash = (await AsyncStorage.getItem(STORAGE_KEYS.passwordHash)) || '';
+
+      console.log('🟦 OFFLINE CIVILIAN: storedUser exists =', !!storedUser);
+      console.log('🟦 OFFLINE CIVILIAN: storedHash exists =', !!storedHash);
 
       if (!storedUser || !storedHash) {
         throw new Error('No offline credentials available');
@@ -229,10 +260,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       return;
     }
 
-    // RESCUER: cloud first
     try {
       const response = await cloudApi.post(endpoint, payload);
+
+      console.log('🔵 RESCUER CLOUD LOGIN RESPONSE:');
+      console.log(JSON.stringify(response.data, null, 2));
+
       const { access_token, user: userData } = response.data || {};
+
+      console.log('🔵 CLOUD TOKEN:', access_token);
+      console.log('🔵 CLOUD USER OBJECT:');
+      console.log(JSON.stringify(userData, null, 2));
+      console.log('🔵 CLOUD TEAM FIELD:', userData?.team);
+      console.log('🔵 CLOUD TEAM NAME:', userData?.team?.name);
 
       if (!access_token || !userData) {
         throw new Error('Invalid cloud login response');
@@ -247,10 +287,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       );
     }
 
-    // RESCUER: mesh fallback
     try {
       const response = await api.post(endpoint, payload);
+
+      console.log('🟡 RESCUER MESH LOGIN RESPONSE:');
+      console.log(JSON.stringify(response.data, null, 2));
+
       const { access_token, user: userData } = response.data || {};
+
+      console.log('🟡 MESH TOKEN:', access_token);
+      console.log('🟡 MESH USER OBJECT:');
+      console.log(JSON.stringify(userData, null, 2));
+      console.log('🟡 MESH TEAM FIELD:', userData?.team);
+      console.log('🟡 MESH TEAM NAME:', userData?.team?.name);
 
       if (!access_token || !userData) {
         throw new Error('Invalid mesh login response');
@@ -265,10 +314,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       );
     }
 
-    // RESCUER: offline fallback
     const storedUser = await AsyncStorage.getItem(STORAGE_KEYS.user);
-    const storedHash =
-      (await AsyncStorage.getItem(STORAGE_KEYS.passwordHash)) || '';
+    const storedHash = (await AsyncStorage.getItem(STORAGE_KEYS.passwordHash)) || '';
+
+    console.log('🟡 OFFLINE RESCUER: storedUser exists =', !!storedUser);
+    console.log('🟡 OFFLINE RESCUER: storedHash exists =', !!storedHash);
 
     if (!storedUser || !storedHash) {
       throw new Error('No offline credentials available');

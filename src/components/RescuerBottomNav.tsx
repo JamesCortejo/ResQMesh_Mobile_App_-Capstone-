@@ -3,10 +3,10 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
-import { RescuerMainTabParamList } from '../navigations/RescuerMainTabs'; // will be created
+import { RescuerMainTabParamList } from '../navigations/RescuerMainTabs';
 
 interface Props {
-  activeTab: 'chat' | 'map';
+  activeTab: 'chat' | 'map' | 'assignments';
 }
 
 const RescuerBottomNav = memo(({ activeTab }: Props) => {
@@ -45,6 +45,21 @@ const RescuerBottomNav = memo(({ activeTab }: Props) => {
           Active Map
         </Text>
       </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.item}
+        onPress={() => navigation.jumpTo('RescuerAssignments')}
+        disabled={isActive('assignments')}
+      >
+        <Ionicons
+          name="medkit-outline"
+          size={22}
+          color={isActive('assignments') ? '#fb4f00' : '#888'}
+        />
+        <Text style={[styles.text, isActive('assignments') && styles.activeText]}>
+          Emergencies
+        </Text>
+      </TouchableOpacity>
     </View>
   );
 });
@@ -59,17 +74,9 @@ const styles = StyleSheet.create({
     borderTopColor: '#e3e3e3',
     backgroundColor: '#fff',
   },
-  item: {
-    alignItems: 'center',
-  },
-  text: {
-    fontSize: 12,
-    color: '#888',
-  },
-  activeText: {
-    color: '#fb4f00',
-    fontWeight: '600',
-  },
+  item: { alignItems: 'center' },
+  text: { fontSize: 12, color: '#888' },
+  activeText: { color: '#fb4f00', fontWeight: '600' },
 });
 
 export default RescuerBottomNav;

@@ -9,6 +9,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import type { MeshNode, DistressDetail } from '../types/MeshNode';
 import { NODE_INACTIVE_TIMEOUT_MS } from '../constants/timeouts';
+import { formatLocalTime12hr } from '../utils/dateHelpers';
 
 interface NodeInfoCardProps {
   node: MeshNode;
@@ -113,7 +114,6 @@ const SignalIndicator = ({ node, color }: SignalIndicatorProps) => {
     <View style={styles.row}>
       <Ionicons name="wifi-outline" size={16} color={color} />
       <View style={styles.signalContent}>
-        {/* Signal label + circles on the same line, tightly grouped */}
         <View style={styles.signalRow}>
           <Text style={styles.infoText}>Signal: </Text>
           <Text style={[styles.signalLabel, { color: signalColor }]}>{label}</Text>
@@ -139,9 +139,6 @@ const SignalIndicator = ({ node, color }: SignalIndicatorProps) => {
   );
 };
 
-// ----------------------------------------------------------------------------
-// Main component
-// ----------------------------------------------------------------------------
 const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
   node,
   distressDetails,
@@ -166,9 +163,7 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return 'Unknown';
-    const date = new Date(dateString);
-    if (Number.isNaN(date.getTime())) return 'Invalid date';
-    return date.toLocaleString();
+    return formatLocalTime12hr(dateString);
   };
 
   const formatCoordinate = (value?: number | null) => {
@@ -186,14 +181,12 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
             <Ionicons name="power-outline" size={16} color="#9e9e9e" />
             <Text style={[styles.infoText, { color: '#666' }]}>Node Offline</Text>
           </View>
-
           <View style={styles.row}>
             <Ionicons name="time-outline" size={16} color="#9e9e9e" />
             <Text style={[styles.infoText, { color: '#666' }]}>
               Last seen: {formatDate(node.lastSeen)}
             </Text>
           </View>
-
           {distressDetails && (
             <>
               <View style={[styles.row, styles.distressHeader, { marginTop: 12 }]}>
@@ -202,34 +195,23 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
                   DISTRESS (stale)
                 </Text>
               </View>
-
               <View style={styles.row}>
                 <Ionicons name="person-outline" size={16} color="#9e9e9e" />
                 <Text style={styles.staleText}>
-                  Victim: {distressDetails.user?.firstName ?? '?'}{' '}
-                  {distressDetails.user?.lastName ?? ''}
+                  Victim: {distressDetails.user?.firstName ?? '?'} {distressDetails.user?.lastName ?? ''}
                 </Text>
               </View>
-
               <View style={styles.row}>
                 <Ionicons name="call-outline" size={16} color="#9e9e9e" />
-                <Text style={styles.staleText}>
-                  Phone: {distressDetails.user?.phone ?? 'N/A'}
-                </Text>
+                <Text style={styles.staleText}>Phone: {distressDetails.user?.phone ?? 'N/A'}</Text>
               </View>
-
               <View style={styles.row}>
                 <Ionicons name="alert-circle-outline" size={16} color="#9e9e9e" />
-                <Text style={styles.staleText}>
-                  Emergency: {distressDetails.reason ?? 'Unknown'}
-                </Text>
+                <Text style={styles.staleText}>Emergency: {distressDetails.reason ?? 'Unknown'}</Text>
               </View>
-
               <View style={styles.row}>
                 <Ionicons name="time-outline" size={16} color="#9e9e9e" />
-                <Text style={styles.staleText}>
-                  Reported: {formatDate(distressDetails.timestamp)}
-                </Text>
+                <Text style={styles.staleText}>Reported: {formatDate(distressDetails.timestamp)}</Text>
               </View>
             </>
           )}
@@ -242,9 +224,7 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
         return (
           <View style={styles.row}>
             <Ionicons name="alert-circle-outline" size={16} color="#d32f2f" />
-            <Text style={[styles.infoText, { color: '#d32f2f' }]}>
-              Loading distress details...
-            </Text>
+            <Text style={[styles.infoText, { color: '#d32f2f' }]}>Loading distress details...</Text>
           </View>
         );
       }
@@ -255,36 +235,24 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
             <Ionicons name="warning" size={20} color="#d32f2f" />
             <Text style={styles.distressTitle}>ACTIVE DISTRESS</Text>
           </View>
-
           <View style={styles.row}>
             <Ionicons name="person-outline" size={16} color="#d32f2f" />
             <Text style={styles.distressText}>
-              Victim: {distressDetails.user?.firstName ?? '?'}{' '}
-              {distressDetails.user?.lastName ?? ''}
+              Victim: {distressDetails.user?.firstName ?? '?'} {distressDetails.user?.lastName ?? ''}
             </Text>
           </View>
-
           <View style={styles.row}>
             <Ionicons name="call-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>
-              Phone: {distressDetails.user?.phone ?? 'N/A'}
-            </Text>
+            <Text style={styles.distressText}>Phone: {distressDetails.user?.phone ?? 'N/A'}</Text>
           </View>
-
           <View style={styles.row}>
             <Ionicons name="water-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>
-              Blood Type: {distressDetails.user?.bloodType ?? 'Unknown'}
-            </Text>
+            <Text style={styles.distressText}>Blood Type: {distressDetails.user?.bloodType ?? 'Unknown'}</Text>
           </View>
-
           <View style={styles.row}>
             <Ionicons name="alert-circle-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>
-              Emergency: {distressDetails.reason ?? 'Unknown'}
-            </Text>
+            <Text style={styles.distressText}>Emergency: {distressDetails.reason ?? 'Unknown'}</Text>
           </View>
-
           <View style={styles.row}>
             <Ionicons name="location-outline" size={16} color="#d32f2f" />
             <Text style={styles.distressText}>
@@ -292,27 +260,21 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
               {formatCoordinate(distressDetails.lng)}
             </Text>
           </View>
-
           <View style={styles.row}>
             <Ionicons name="time-outline" size={16} color="#d32f2f" />
-            <Text style={styles.distressText}>
-              Activated: {formatDate(distressDetails.timestamp)}
-            </Text>
+            <Text style={styles.distressText}>Activated: {formatDate(distressDetails.timestamp)}</Text>
           </View>
         </>
       );
     }
 
-    // Normal active node
     return (
       <>
         <View style={styles.row}>
           <Ionicons name="people-outline" size={16} color={iconColor} />
           <Text style={styles.infoText}>Users connected: {node.users ?? 0}</Text>
         </View>
-
         <SignalIndicator node={node} color={iconColor} />
-
         <View style={styles.row}>
           <Ionicons name="location-outline" size={16} color={iconColor} />
           <Text style={styles.infoText}>
@@ -320,12 +282,9 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
             {formatCoordinate(node.longitude ?? node.lng)}
           </Text>
         </View>
-
         <View style={styles.row}>
           <Ionicons name="time-outline" size={16} color={iconColor} />
-          <Text style={styles.infoText}>
-            Last seen: {formatDate(node.lastSeen)}
-          </Text>
+          <Text style={styles.infoText}>Last seen: {formatDate(node.lastSeen)}</Text>
         </View>
       </>
     );
@@ -340,12 +299,9 @@ const NodeInfoCard: React.FC<NodeInfoCardProps> = ({
           </Text>
           <Text style={styles.nodeName}>{node.name}</Text>
         </View>
-
         <View style={styles.divider} />
-
         {renderContent()}
       </ScrollView>
-
       <TouchableOpacity style={styles.closeButton} onPress={onClose}>
         <Text style={styles.closeButtonText}>Close</Text>
       </TouchableOpacity>
@@ -362,91 +318,24 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     maxHeight: 400,
   },
-  header: {
-    marginBottom: 12,
-  },
-  nodeNumber: {
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 2,
-  },
-  nodeName: {
-    fontSize: 14,
-    color: '#555',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#f0f0f0',
-    marginVertical: 10,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginBottom: 8,
-  },
-  infoText: {
-    fontSize: 14,
-    color: '#333',
-  },
-  signalContent: {
-    flex: 1,
-    gap: 2,
-  },
-  signalRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  signalLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  circleRow: {
-    flexDirection: 'row',
-    gap: 4,
-    alignItems: 'center',
-  },
-  signalCircle: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  rssiText: {
-    fontSize: 11,
-    color: '#999',
-    marginTop: 1,
-  },
-  distressHeader: {
-    marginBottom: 10,
-  },
-  distressTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#d32f2f',
-    marginLeft: 4,
-  },
-  distressText: {
-    fontSize: 14,
-    color: '#333',
-    flex: 1,
-  },
-  staleText: {
-    fontSize: 14,
-    color: '#888',
-    flex: 1,
-  },
-  closeButton: {
-    marginTop: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-  },
-  closeButtonText: {
-    color: '#1e88e5',
-    fontWeight: '500',
-  },
+  header: { marginBottom: 12 },
+  nodeNumber: { fontSize: 16, fontWeight: '700', marginBottom: 2 },
+  nodeName: { fontSize: 14, color: '#555' },
+  divider: { height: 1, backgroundColor: '#f0f0f0', marginVertical: 10 },
+  row: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
+  infoText: { fontSize: 14, color: '#333' },
+  signalContent: { flex: 1, gap: 2 },
+  signalRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  signalLabel: { fontSize: 14, fontWeight: '600' },
+  circleRow: { flexDirection: 'row', gap: 4, alignItems: 'center' },
+  signalCircle: { width: 8, height: 8, borderRadius: 4 },
+  rssiText: { fontSize: 11, color: '#999', marginTop: 1 },
+  distressHeader: { marginBottom: 10 },
+  distressTitle: { fontSize: 16, fontWeight: '700', color: '#d32f2f', marginLeft: 4 },
+  distressText: { fontSize: 14, color: '#333', flex: 1 },
+  staleText: { fontSize: 14, color: '#888', flex: 1 },
+  closeButton: { marginTop: 12, paddingVertical: 10, alignItems: 'center', backgroundColor: '#f0f0f0', borderRadius: 8 },
+  closeButtonText: { color: '#1e88e5', fontWeight: '500' },
 });
 
 export default NodeInfoCard;
