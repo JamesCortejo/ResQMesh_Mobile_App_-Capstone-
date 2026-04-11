@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -47,6 +47,18 @@ type ModalType = 'success' | 'error' | 'info';
 
 const CACHE_KEY = 'cached_assignments';
 
+const PRIORITY_RANK: Record<string, number> = {
+  high: 3,
+  medium: 2,
+  low: 1,
+};
+
+const PRIORITY_COLORS: Record<string, string> = {
+  high: '#C62828',
+  medium: '#EF6C00',
+  low: '#2E7D32',
+};
+
 const RescuerAssignmentsScreen = () => {
   const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,6 +71,37 @@ const RescuerAssignmentsScreen = () => {
   const [modalType, setModalType] = useState<ModalType>('info');
   const [modalAction, setModalAction] = useState<(() => Promise<void> | void) | null>(null);
   const [modalConfirmText, setModalConfirmText] = useState('OK');
+
+  const sortedAssignments = useMemo(() => {
+    return [...assignments].sort((a, b) => {
+      const aPriority = PRIORITY_RANK[(a.distress.priority || '').toLowerCase()] ?? 0;
+      const bPriority = PRIORITY_RANK[(b.distress.priority || '').toLowerCase()] ?? 0;
+      if (aPriority !== bPriority) {
+        return bPriority - aPriority;
+      }
+      return new Date(b.assigned_at).getTime() - new Date(a.assigned_at).getTime();
+    });
+  }, [assignments]);
+
+  const assignmentSummary = useMemo(() => {
+    let high = 0;
+    let medium = 0;
+    let low = 0;
+
+    for (const item of assignments) {
+      const priority = (item.distress.priority || '').toLowerCase();
+      if (priority === 'high') high += 1;
+      else if (priority === 'medium') medium += 1;
+      else low += 1;
+    }
+
+    return {
+      total: assignments.length,
+      high,
+      medium,
+      low,
+    };
+  }, [assignments]);
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener((state) => {
@@ -223,18 +266,15 @@ const RescuerAssignmentsScreen = () => {
   };
 
   const renderAssignment = ({ item }: { item: Assignment }) => {
-    const priorityColor =
-      item.distress.priority === 'high'
-        ? '#d32f2f'
-        : item.distress.priority === 'medium'
-        ? '#fb4f00'
-        : '#2e7d32';
+    const priority = (item.distress.priority || 'low').toLowerCase();
+    const priorityColor = PRIORITY_COLORS[priority] ?? PRIORITY_COLORS.low;
+    const hasEta = item.eta_minutes !== null;
 
     return (
-      <View style={styles.card}>
+      <View style={[styles.card, { borderLeftColor: priorityColor }]}>
         <View style={styles.header}>
           <View style={styles.titleRow}>
-            <Ionicons name="warning-outline" size={20} color="#d32f2f" />
+            <Ionicons name="warning-outline" size={20} color={priorityColor} />
             <Text style={styles.distressCode}>{item.distress.code}</Text>
             <View style={[styles.priorityBadge, { backgroundColor: priorityColor }]}>
               <Text style={styles.priorityText}>
@@ -242,21 +282,38 @@ const RescuerAssignmentsScreen = () => {
               </Text>
             </View>
           </View>
-          <Text style={styles.nodeName}>Node: {item.node.name || item.node.id}</Text>
+
+          <View style={styles.metaRow}>
+            <View style={styles.metaPill}>
+              <Ionicons name="git-network-outline" size={14} color="#5f6368" />
+              <Text style={styles.metaPillText}>Node: {item.node.name || item.node.id}</Text>
+            </View>
+
+            <View style={[styles.metaPill, styles.statusPill]}>
+              <Ionicons name="pulse-outline" size={14} color="#3b3f45" />
+              <Text style={styles.metaPillText}>{item.status.replace('_', ' ')}</Text>
+            </View>
+          </View>
+
         </View>
 
         <View style={styles.details}>
-          <Text style={styles.reason}>Reason: {item.distress.reason}</Text>
+          <Text style={styles.reasonLabel}>Reason</Text>
+          <Text style={styles.reason}>{item.distress.reason}</Text>
           <Text style={styles.victim}>
             Victim: {item.distress.user.firstName} {item.distress.user.lastName}
           </Text>
           <Text style={styles.phone}>Phone: {item.distress.user.phone}</Text>
-          {item.eta_minutes !== null && (
-            <Text style={styles.eta}>ETA: {item.eta_minutes} min</Text>
-          )}
-          <Text style={styles.assignedAt}>
-            Assigned: {new Date(item.assigned_at).toLocaleString()}
-          </Text>
+          <View style={styles.timeRow}>
+            {hasEta ? (
+              <Text style={styles.eta}>ETA: {item.eta_minutes} min</Text>
+            ) : (
+              <Text style={styles.noEta}>ETA pending</Text>
+            )}
+            <Text style={styles.assignedAt}>
+              {new Date(item.assigned_at).toLocaleString()}
+            </Text>
+          </View>
         </View>
 
         <TouchableOpacity
@@ -295,8 +352,42 @@ const RescuerAssignmentsScreen = () => {
         </View>
       )}
 
+      <View style={styles.summaryWrap}>
+        <View style={styles.summaryHeadRow}>
+          <View>
+            <Text style={styles.summaryTitle}>Active Deployments</Text>
+            <Text style={styles.summarySubtitle}>
+              {isOnline ? 'Live cloud assignments' : 'Cached assignments snapshot'}
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.refreshChip} onPress={onRefresh}>
+            <Ionicons name="refresh" size={15} color="#fff" />
+            <Text style={styles.refreshChipText}>Refresh</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.summaryGrid}>
+          <View style={[styles.summaryCard, styles.summaryCardTotal]}>
+            <Text style={styles.summaryValue}>{assignmentSummary.total}</Text>
+            <Text style={styles.summaryLabel}>Total</Text>
+          </View>
+          <View style={[styles.summaryCard, styles.summaryCardHigh]}>
+            <Text style={styles.summaryValue}>{assignmentSummary.high}</Text>
+            <Text style={styles.summaryLabel}>High</Text>
+          </View>
+          <View style={[styles.summaryCard, styles.summaryCardMedium]}>
+            <Text style={styles.summaryValue}>{assignmentSummary.medium}</Text>
+            <Text style={styles.summaryLabel}>Medium</Text>
+          </View>
+          <View style={[styles.summaryCard, styles.summaryCardLow]}>
+            <Text style={styles.summaryValue}>{assignmentSummary.low}</Text>
+            <Text style={styles.summaryLabel}>Low</Text>
+          </View>
+        </View>
+      </View>
+
       <FlatList
-        data={assignments}
+        data={sortedAssignments}
         keyExtractor={(item) => item.id.toString()}
         renderItem={renderAssignment}
         refreshControl={
@@ -381,7 +472,7 @@ const RescuerAssignmentsScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  listContent: { padding: 16, paddingBottom: 24 },
+  listContent: { paddingHorizontal: 16, paddingBottom: 24 },
   emptyListContent: { flexGrow: 1, justifyContent: 'center' },
 
   offlineBanner: {
@@ -404,23 +495,64 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 16,
     marginBottom: 16,
+    borderLeftWidth: 5,
     elevation: 2,
     shadowColor: '#000',
     shadowOpacity: 0.05,
     shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
   },
   header: { marginBottom: 12 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
   distressCode: { fontSize: 16, fontWeight: '700', marginLeft: 6, flex: 1 },
   priorityBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 12 },
   priorityText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
-  nodeName: { fontSize: 13, color: '#666' },
+  metaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  metaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#f4f6f8',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    flexShrink: 1,
+  },
+  statusPill: {
+    backgroundColor: '#eef2ff',
+  },
+  metaPillText: {
+    fontSize: 12,
+    color: '#49505a',
+    fontWeight: '600',
+    textTransform: 'capitalize',
+  },
   details: { marginBottom: 16 },
-  reason: { fontSize: 14, fontWeight: '500', marginBottom: 4 },
-  victim: { fontSize: 13, color: '#333', marginBottom: 2 },
-  phone: { fontSize: 13, color: '#333', marginBottom: 2 },
-  eta: { fontSize: 13, color: '#fb4f00', fontWeight: '600', marginTop: 4 },
-  assignedAt: { fontSize: 11, color: '#999', marginTop: 6 },
+  reasonLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#7b818c',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 3,
+  },
+  reason: { fontSize: 14, fontWeight: '600', marginBottom: 8, color: '#20242c' },
+  victim: { fontSize: 13, color: '#333', marginBottom: 4 },
+  phone: { fontSize: 13, color: '#333', marginBottom: 6 },
+  timeRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  eta: { fontSize: 13, color: '#fb4f00', fontWeight: '700' },
+  noEta: { fontSize: 13, color: '#757c86', fontWeight: '600' },
+  assignedAt: { fontSize: 11, color: '#999', flexShrink: 1, textAlign: 'right' },
   resolveButton: {
     backgroundColor: '#d32f2f',
     paddingVertical: 10,
@@ -434,6 +566,72 @@ const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyContainer: { alignItems: 'center', marginTop: 50 },
   emptyText: { fontSize: 16, color: '#888', marginTop: 12 },
+
+  summaryWrap: {
+    marginTop: 14,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    borderRadius: 16,
+    backgroundColor: '#111827',
+    padding: 14,
+  },
+  summaryHeadRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  summaryTitle: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 17,
+  },
+  summarySubtitle: {
+    marginTop: 2,
+    color: '#b6bec8',
+    fontSize: 12,
+  },
+  refreshChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    backgroundColor: '#fb4f00',
+  },
+  refreshChipText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  summaryGrid: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  summaryCard: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  summaryCardTotal: { backgroundColor: '#1f2937' },
+  summaryCardHigh: { backgroundColor: '#7f1d1d' },
+  summaryCardMedium: { backgroundColor: '#7c2d12' },
+  summaryCardLow: { backgroundColor: '#14532d' },
+  summaryValue: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  summaryLabel: {
+    marginTop: 2,
+    color: '#e5e7eb',
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
 
   modalOverlay: {
     flex: 1,

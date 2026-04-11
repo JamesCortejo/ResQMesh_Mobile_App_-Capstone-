@@ -22,15 +22,15 @@ import MainLayout from '../../layouts/MainLayout';
 import WelcomeCard from '../../components/WelcomeCard';
 import NodeInfoCard from '../../components/NodeInfoCard';
 import api from '../../services/api';
+import {
+  fetchCivilianLiveRoute,
+  LngLat,
+  RouteFetchStatus,
+} from '../../services/routeService';
 import { NODE_INACTIVE_TIMEOUT_MS } from '../../constants/timeouts';
 import { MeshNode, DistressDetail } from '../../types/MeshNode';
 
 const { width, height } = Dimensions.get('window');
-
-// ----------------------------------------------------------------------------
-// Types
-// ----------------------------------------------------------------------------
-type LngLat = [number, number];
 
 // ----------------------------------------------------------------------------
 // Constants
@@ -193,10 +193,11 @@ interface MapContentProps {
   nodes: MeshNode[];
   connectedNodeId: string | null;
   pulse: number;
+  activeRoute: LngLat[];
   onNodePress: (node: MeshNode) => void;
 }
 
-const MapContent = React.memo(({ nodes, connectedNodeId, pulse, onNodePress }: MapContentProps) => {
+const MapContent = React.memo(({ nodes, connectedNodeId, pulse, activeRoute, onNodePress }: MapContentProps) => {
   const validNodes = useMemo(() => {
     return nodes
       .map(node => {
@@ -241,6 +242,49 @@ const MapContent = React.memo(({ nodes, connectedNodeId, pulse, onNodePress }: M
     };
   }, [validNodes, connectedNodeId]);
 
+  const routeGeoJSON = useMemo(() => {
+    if (!activeRoute || activeRoute.length < 2) return null;
+    return {
+      type: 'FeatureCollection' as const,
+      features: [
+        {
+          type: 'Feature' as const,
+          properties: {},
+          geometry: {
+            type: 'LineString' as const,
+            coordinates: activeRoute,
+          },
+        },
+      ],
+    };
+  }, [activeRoute]);
+
+  const routeMarkersGeoJSON = useMemo(() => {
+    if (!activeRoute || activeRoute.length < 2) return null;
+
+    return {
+      type: 'FeatureCollection' as const,
+      features: [
+        {
+          type: 'Feature' as const,
+          properties: { kind: 'start' },
+          geometry: {
+            type: 'Point' as const,
+            coordinates: activeRoute[0],
+          },
+        },
+        {
+          type: 'Feature' as const,
+          properties: { kind: 'end' },
+          geometry: {
+            type: 'Point' as const,
+            coordinates: activeRoute[activeRoute.length - 1],
+          },
+        },
+      ],
+    };
+  }, [activeRoute]);
+
   const handleNodePress = useCallback(
     (e: any) => {
       const id = e.features?.[0]?.properties?.id;
@@ -276,6 +320,61 @@ const MapContent = React.memo(({ nodes, connectedNodeId, pulse, onNodePress }: M
             id="lines-layer"
             belowLayerID="nodes-pulse"
             style={{ lineColor: '#1e88e5', lineWidth: 3 }}
+          />
+        </ShapeSource>
+      )}
+
+      {routeGeoJSON && (
+        <ShapeSource id="route" shape={routeGeoJSON}>
+          <LineLayer
+            id="route-line-glow"
+            style={{
+              lineColor: '#8B0000',
+              lineWidth: 12,
+              lineOpacity: 0.25,
+              lineBlur: 2,
+            }}
+          />
+          <LineLayer
+            id="route-line"
+            style={{
+              lineColor: '#8B0000',
+              lineWidth: 6,
+            }}
+          />
+        </ShapeSource>
+      )}
+
+      {routeMarkersGeoJSON && (
+        <ShapeSource id="route-markers" shape={routeMarkersGeoJSON}>
+          <CircleLayer
+            id="route-start-pulse"
+            filter={['==', ['get', 'kind'], 'start']}
+            style={{
+              circleRadius: 18,
+              circleColor: '#1e88e5',
+              circleOpacity: 0.2,
+            }}
+          />
+          <CircleLayer
+            id="route-start-marker"
+            filter={['==', ['get', 'kind'], 'start']}
+            style={{
+              circleRadius: 11,
+              circleColor: '#1e88e5',
+              circleStrokeWidth: 3,
+              circleStrokeColor: '#ffffff',
+            }}
+          />
+          <CircleLayer
+            id="route-end-marker"
+            filter={['==', ['get', 'kind'], 'end']}
+            style={{
+              circleRadius: 9,
+              circleColor: '#b71c1c',
+              circleStrokeWidth: 2,
+              circleStrokeColor: '#ffffff',
+            }}
           />
         </ShapeSource>
       )}
@@ -384,6 +483,51 @@ const MapScreen = () => {
   const nodes = useNodes(meshConnected);
   const { selectedNode, setSelectedNode, distressDetails } = useSelectedNode();
   const pulse = usePulseAnimation();
+  const [activeRoute, setActiveRoute] = useState<LngLat[]>([]);
+  const [activeRouteEta, setActiveRouteEta] = useState<number | null>(null);
+  const [activeRouteDistanceKm, setActiveRouteDistanceKm] = useState<number | null>(null);
+  const [routeStatus, setRouteStatus] = useState<RouteFetchStatus>('no-assignment');
+  const [routeMessage, setRouteMessage] = useState('No active rescue route.');
+
+  useEffect(() => {
+    const fetchLiveRoute = async () => {
+      if (!meshConnected) {
+        setActiveRoute([]);
+        setActiveRouteEta(null);
+        setActiveRouteDistanceKm(null);
+        setRouteStatus('unavailable');
+        setRouteMessage('Live route unavailable. Connect to mesh hotspot.');
+        return;
+      }
+
+      const result = await fetchCivilianLiveRoute(connectedNodeId);
+      setRouteStatus(result.status);
+      setRouteMessage(result.message ?? '');
+
+      if (result.status !== 'available' || !result.data) {
+        setActiveRoute([]);
+        setActiveRouteEta(null);
+        setActiveRouteDistanceKm(null);
+        return;
+      }
+
+      const data = result.data;
+      const coordinates = data.route?.coordinates || [];
+      setActiveRoute(coordinates);
+
+      const eta = data.route?.eta_minutes ?? data.assignment?.eta_minutes ?? null;
+      setActiveRouteEta(eta);
+
+      const distanceMeters = data.route?.distance_m ?? null;
+      setActiveRouteDistanceKm(
+        distanceMeters !== null ? Number(distanceMeters) / 1000 : null
+      );
+    };
+
+    fetchLiveRoute();
+    const interval = setInterval(fetchLiveRoute, 15000);
+    return () => clearInterval(interval);
+  }, [connectedNodeId, meshConnected]);
 
   if (loading) {
     return (
@@ -407,9 +551,39 @@ const MapScreen = () => {
                 nodes={nodes}
                 connectedNodeId={connectedNodeId}
                 pulse={pulse}
+                activeRoute={activeRoute}
                 onNodePress={setSelectedNode}
               />
               <Legend />
+
+              <View style={styles.routeBadge}>
+                {routeStatus === 'available' ? (
+                  <>
+                    <Text style={styles.routeBadgeTitle}>Rescue ETA</Text>
+                    <Text style={styles.routeBadgeText}>
+                      ETA: {activeRouteEta !== null ? `${activeRouteEta} min` : '—'}
+                    </Text>
+                    <Text style={styles.routeBadgeText}>
+                      Distance:{' '}
+                      {activeRouteDistanceKm !== null
+                        ? `${activeRouteDistanceKm.toFixed(1)} km`
+                        : '—'}
+                    </Text>
+                    {activeRoute.length < 2 && (
+                      <Text style={styles.routeBadgeHint}>
+                        Route path unavailable on this node. Showing ETA only.
+                      </Text>
+                    )}
+                  </>
+                ) : routeStatus === 'unavailable' ? (
+                  <>
+                    <Text style={styles.routeBadgeTitle}>Rescue ETA</Text>
+                    <Text style={styles.routeBadgeText}>{routeMessage || 'Live route unavailable.'}</Text>
+                  </>
+                ) : (
+                  <Text style={styles.routeBadgeText}>No active rescue route</Text>
+                )}
+              </View>
             </>
           ) : (
             <View style={styles.noConnection}>
@@ -475,6 +649,37 @@ const styles = StyleSheet.create({
   legendText: {
     color: '#fff',
     fontSize: 11,
+  },
+  routeBadge: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    backgroundColor: 'rgba(139, 0, 0, 0.85)',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 12,
+    zIndex: 20,
+    maxWidth: width * 0.52,
+    borderWidth: 1,
+    borderColor: '#ff5252',
+  },
+  routeBadgeTitle: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 4,
+    letterSpacing: 0.5,
+  },
+  routeBadgeText: {
+    color: '#fff',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  routeBadgeHint: {
+    marginTop: 4,
+    color: '#ffd9d9',
+    fontSize: 10,
+    lineHeight: 14,
   },
   cardContainer: {
     position: 'absolute',

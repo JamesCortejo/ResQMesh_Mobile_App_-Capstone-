@@ -20,13 +20,18 @@ import {
 } from '@maplibre/maplibre-react-native';
 import { Ionicons } from '@expo/vector-icons';
 import NetInfo from '@react-native-community/netinfo';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import RescuerMainLayout from '../../layouts/RescuerMainLayout';
 import RescuerWelcomeCard from '../../components/RescuerWelcomeCard';
 import NodeInfoCard from '../../components/NodeInfoCard';
 import cloudApi from '../../services/cloudApi';
 import api from '../../services/api';
+import {
+  fetchRescuerLiveRoute,
+  LiveRouteResponse,
+  RouteFetchStatus,
+  TileSource,
+} from '../../services/routeService';
 import { MeshNode, DistressDetail } from '../../types/MeshNode';
 
 const { width, height } = Dimensions.get('window');
@@ -44,46 +49,6 @@ const buildMapStyle = (useOnline: boolean) => ({
   sources: {},
   layers: [],
 });
-
-type TileSource = 'online' | 'local' | 'none';
-
-type LiveRouteResponse = {
-  assignment: {
-    id: number;
-    distress_id: number;
-    team_id: number | null;
-    rescuer_id: number | null;
-    assigned_at: string | null;
-    eta_minutes: number | null;
-    status: string;
-    distress: {
-      code: string;
-      reason: string;
-      latitude: number | null;
-      longitude: number | null;
-      timestamp: string | null;
-      priority: string;
-      user: {
-        firstName: string;
-        lastName: string;
-        phone: string;
-        bloodType: string;
-        age: number;
-      };
-    };
-  };
-  rescuer_location: {
-    latitude: number | null;
-    longitude: number | null;
-    recorded_at: string | null;
-  };
-  route: {
-    distance_m: number | null;
-    duration_s: number | null;
-    eta_minutes: number | null;
-    coordinates: LngLat[];
-  };
-};
 
 const isDistressValue = (distress: unknown): boolean => {
   if (distress === true || distress === 1 || distress === 'true') return true;
@@ -132,6 +97,8 @@ const RescuerMapScreen = () => {
   const [activeRouteDistanceKm, setActiveRouteDistanceKm] = useState<number | null>(null);
   const [activeAssignment, setActiveAssignment] =
     useState<LiveRouteResponse['assignment'] | null>(null);
+  const [routeStatus, setRouteStatus] = useState<RouteFetchStatus>('no-assignment');
+  const [routeMessage, setRouteMessage] = useState<string>('No active rescue route.');
 
   const mapRef = useRef<any>(null);
 
@@ -286,7 +253,21 @@ const RescuerMapScreen = () => {
   };
 
   const fetchLiveRoute = async () => {
-    if (tileSource !== 'online') {
+    if (tileSource === 'none') {
+      setActiveRoute([]);
+      setActiveAssignment(null);
+      setActiveRouteEta(null);
+      setActiveRouteDistanceKm(null);
+      setRouteStatus('unavailable');
+      setRouteMessage('Live route unavailable. Connect to mesh hotspot or internet.');
+      return;
+    }
+
+    const result = await fetchRescuerLiveRoute(tileSource);
+    setRouteStatus(result.status);
+    setRouteMessage(result.message ?? '');
+
+    if (result.status !== 'available' || !result.data) {
       setActiveRoute([]);
       setActiveAssignment(null);
       setActiveRouteEta(null);
@@ -294,41 +275,19 @@ const RescuerMapScreen = () => {
       return;
     }
 
-    try {
-      const token = await AsyncStorage.getItem('accessToken');
-      console.log('🌐 USING TOKEN FOR ROUTE:', token);
+    const data = result.data;
+    setActiveAssignment(data.assignment || null);
 
-      const res = await cloudApi.get<LiveRouteResponse>('/api/rescuer/route/live', {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
+    const coordinates = data.route?.coordinates || [];
+    setActiveRoute(coordinates);
 
-      console.log('✅ ROUTE RESPONSE:', res.data);
+    const eta = data.route?.eta_minutes ?? data.assignment?.eta_minutes ?? null;
+    setActiveRouteEta(eta);
 
-      const data = res.data;
-
-      setActiveAssignment(data.assignment || null);
-
-      const coordinates = data.route?.coordinates || [];
-      setActiveRoute(coordinates);
-
-      const eta = data.route?.eta_minutes ?? data.assignment?.eta_minutes ?? null;
-      setActiveRouteEta(eta);
-
-      const distanceMeters = data.route?.distance_m ?? null;
-      setActiveRouteDistanceKm(
-        distanceMeters !== null ? Number(distanceMeters) / 1000 : null
-      );
-    } catch (e: any) {
-      console.log('❌ ROUTE ERROR:', e?.response?.data || e?.message);
-
-      const status = e?.response?.status;
-      if (status === 404) {
-        setActiveRoute([]);
-        setActiveAssignment(null);
-        setActiveRouteEta(null);
-        setActiveRouteDistanceKm(null);
-      }
-    }
+    const distanceMeters = data.route?.distance_m ?? null;
+    setActiveRouteDistanceKm(
+      distanceMeters !== null ? Number(distanceMeters) / 1000 : null
+    );
   };
 
   useEffect(() => {
@@ -364,11 +323,13 @@ const RescuerMapScreen = () => {
   }, [selectedNode, tileSource]);
 
   useEffect(() => {
-    if (tileSource !== 'online') {
+    if (tileSource === 'none') {
       setActiveRoute([]);
       setActiveAssignment(null);
       setActiveRouteEta(null);
       setActiveRouteDistanceKm(null);
+      setRouteStatus('unavailable');
+      setRouteMessage('Live route unavailable. Connect to mesh hotspot or internet.');
       return;
     }
 
@@ -712,9 +673,9 @@ const RescuerMapScreen = () => {
             </View>
           )}
 
-          {tileSource === 'online' && (
+          {(tileSource === 'online' || tileSource === 'local') && (
             <View style={styles.routeBadge}>
-              {activeAssignment ? (
+              {routeStatus === 'available' && activeAssignment ? (
                 <>
                   <Text style={styles.routeBadgeTitle}>Live Route</Text>
                   <Text style={styles.routeBadgeText}>
@@ -729,6 +690,11 @@ const RescuerMapScreen = () => {
                       ? `${activeRouteDistanceKm.toFixed(1)} km`
                       : '—'}
                   </Text>
+                </>
+              ) : routeStatus === 'unavailable' ? (
+                <>
+                  <Text style={styles.routeBadgeTitle}>Live Route</Text>
+                  <Text style={styles.routeBadgeText}>{routeMessage || 'Live route unavailable.'}</Text>
                 </>
               ) : (
                 <Text style={styles.routeBadgeText}>No active rescue route</Text>
